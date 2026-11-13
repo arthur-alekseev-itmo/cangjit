@@ -570,6 +570,8 @@ public:
 
     bool scanDepPkg = false; /**< Get the package(s) which the current package depends on. */
 
+    bool jit = false; /**< Use the experimental in-process JIT. */
+
     bool noSubPkg = false; /**< Whether the package has sub-packages. */
 
     bool displayLineInfo = true; /**< Whether display line information. */

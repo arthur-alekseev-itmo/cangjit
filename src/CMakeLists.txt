@@ -403,6 +403,9 @@ add_subdirectory(Mangle)
 
 if (CANGJIE_CODEGEN_CJNATIVE_BACKEND)
     add_subdirectory(CHIR)
+    add_subdirectory(JIT EXCLUDE_FROM_ALL)
+    target_link_libraries(cjc CangjieJIT)
+    target_link_libraries(cangjie-frontend CangjieJIT)
     add_subdirectory(CodeGen)
 endif()
 

@@ -12,6 +12,7 @@
 
 #include "cangjie/FrontendTool/FrontendTool.h"
 
+#include <iostream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -30,6 +31,10 @@
 #include "cangjie/Modules/PackageManager.h"
 #include "cangjie/Utils/FileUtil.h"
 #include "cangjie/Utils/ProfileRecorder.h"
+
+#ifdef CANGJIE_CODEGEN_CJNATIVE_BACKEND
+#include "../JIT/JITCompiler.h"
+#endif
 
 #if (defined RELEASE)
 #include "cangjie/Utils/Signal.h"
@@ -111,6 +116,14 @@ static bool ExecuteCompile(DefaultCompilerInstance& instance)
     }
 
     auto& globalOptions = instance.invocation.globalOptions;
+    if (globalOptions.jit &&
+        (globalOptions.enIncrementalCompilation || globalOptions.compileCjd || globalOptions.scanDepPkg ||
+            !globalOptions.inputObjs.empty() || !globalOptions.bcInputFiles.empty() || isEmitCHIR ||
+            globalOptions.outputMode != GlobalOptions::OutputMode::EXECUTABLE ||
+            opts.dumpAction != FrontendOptions::DumpAction::NO_ACTION)) {
+        WriteError("--jit cannot be combined with incremental compilation, binary inputs, or other output modes.\n");
+        return false;
+    }
     if (!globalOptions.compilePackage && globalOptions.srcFiles.empty() && !globalOptions.inputObjs.empty()) {
         using namespace std::literals;
         static constexpr std::string_view CJ_PREFIX = "cangjie-";
@@ -144,6 +157,20 @@ static bool ExecuteCompile(DefaultCompilerInstance& instance)
     if (!instance.Compile(CompileStage::CHIR)) {
         return false;
     }
+#ifdef CANGJIE_CODEGEN_CJNATIVE_BACKEND
+    if (globalOptions.jit) {
+        auto packages = instance.GetAllCHIRPackages();
+        if (packages.empty()) {
+            WriteError("--jit requires a source package containing CHIR.\n");
+            return false;
+        }
+        JIT::JITCompiler jit;
+        for (const auto* package : packages) {
+            jit.Compile(*package, std::cout);
+        }
+        return static_cast<bool>(std::cout);
+    }
+#endif
     bool res = true;
     if (!isEmitCHIR && instance.invocation.globalOptions.outputMode != GlobalOptions::OutputMode::CHIR) {
         Cangjie::ICE::TriggerPointSetter iceSetter(CompileStage::CODEGEN);
