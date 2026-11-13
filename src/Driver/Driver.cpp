@@ -229,6 +229,10 @@ bool Driver::ExecuteCompilation() const
         DeleteInstance(instance);
         return false;
     }
+    if (driverOptions->jit) {
+        DeleteInstance(instance);
+        return true;
+    }
     if (driverOptions->enableVerbose) {
         FrontendCmdPrint(*driverOptions.get(), cangjieHome, args);
     }
