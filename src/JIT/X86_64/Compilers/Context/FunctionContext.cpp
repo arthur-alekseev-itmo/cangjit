@@ -47,6 +47,7 @@ const RegisterAllocation& FunctionContext::GetRegisterAllocation() const noexcep
 void FunctionContext::Dump(std::ostream& output) const
 {
     output << "FunctionContext(function=" << function->GetIdentifier() << ")\n";
+    output << "Body:\n" << function->GetBody()->ToString(0) << '\n';
     valueNumeration.Dump(output);
     interferenceGraph.Dump(output);
     registerAllocation.Dump(output);

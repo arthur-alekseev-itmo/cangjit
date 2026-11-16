@@ -9,12 +9,17 @@
 #include "Compilers/CompileFunction.h"
 
 #include "cangjie/CHIR/IR/Package.h"
+#include "cangjie/Mangle/MangleUtils.h"
 
 namespace Cangjie::JIT::X86_64 {
 void X86_64Compiler::Compile(const CHIR::Package& package, std::ostream& output) const
 {
     for (const auto* function : package.GetGlobalFuncsWithBody()) {
+        if (function->GetIdentifierWithoutPrefix() != USER_MAIN_MANGLED_NAME) {
+            continue;
+        }
         CompileFunction(*function).Compile(output);
+        return;
     }
 }
 } // namespace Cangjie::JIT::X86_64
