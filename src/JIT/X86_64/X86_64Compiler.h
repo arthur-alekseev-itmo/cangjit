@@ -4,8 +4,8 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#ifndef CANGJIE_JIT_JITCOMPILER_H
-#define CANGJIE_JIT_JITCOMPILER_H
+#ifndef CANGJIE_JIT_X86_64_X86_64COMPILER_H
+#define CANGJIE_JIT_X86_64_X86_64COMPILER_H
 
 #include <iosfwd>
 
@@ -13,11 +13,11 @@ namespace Cangjie::CHIR {
 class Package;
 }
 
-namespace Cangjie::JIT {
-class JITCompiler {
+namespace Cangjie::JIT::X86_64 {
+class X86_64Compiler {
 public:
     void Compile(const CHIR::Package& package, std::ostream& output) const;
 };
-} // namespace Cangjie::JIT
+} // namespace Cangjie::JIT::X86_64
 
-#endif // CANGJIE_JIT_JITCOMPILER_H
+#endif // CANGJIE_JIT_X86_64_X86_64COMPILER_H

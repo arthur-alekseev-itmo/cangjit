@@ -32,8 +32,8 @@
 #include "cangjie/Utils/FileUtil.h"
 #include "cangjie/Utils/ProfileRecorder.h"
 
-#ifdef CANGJIE_CODEGEN_CJNATIVE_BACKEND
-#include "../JIT/JITCompiler.h"
+#if defined(CANGJIE_CODEGEN_CJNATIVE_BACKEND) && defined(CANGJIE_JIT_X86_64)
+#include "../JIT/X86_64/X86_64Compiler.h"
 #endif
 
 #if (defined RELEASE)
@@ -159,16 +159,21 @@ static bool ExecuteCompile(DefaultCompilerInstance& instance)
     }
 #ifdef CANGJIE_CODEGEN_CJNATIVE_BACKEND
     if (globalOptions.jit) {
+#ifdef CANGJIE_JIT_X86_64
         auto packages = instance.GetAllCHIRPackages();
         if (packages.empty()) {
             WriteError("--jit requires a source package containing CHIR.\n");
             return false;
         }
-        JIT::JITCompiler jit;
+        JIT::X86_64::X86_64Compiler jit;
         for (const auto* package : packages) {
             jit.Compile(*package, std::cout);
         }
         return static_cast<bool>(std::cout);
+#else
+        WriteError("--jit is only supported on x86-64 targets.\n");
+        return false;
+#endif
     }
 #endif
     bool res = true;
