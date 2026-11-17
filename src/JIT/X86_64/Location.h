@@ -57,6 +57,8 @@ public:
         REGISTER,
         STACK,
         GLOBAL,
+        SIMD_REGISTER,
+        INCOMING_STACK,
     };
 
     struct RegisterLocation {
@@ -73,7 +75,17 @@ public:
         std::string name;
     };
 
-    using Value = std::variant<RegisterLocation, StackLocation, GlobalLocation>;
+    struct SimdRegisterLocation {
+        Index index;
+        OperandWidth width;
+    };
+
+    struct IncomingStackLocation {
+        Index index;
+    };
+
+    using Value = std::variant<RegisterLocation, StackLocation, GlobalLocation, SimdRegisterLocation,
+        IncomingStackLocation>;
 
     static Location Register(Index index, RegisterType type, OperandWidth width) noexcept
     {
@@ -88,6 +100,16 @@ public:
     static Location Global(std::string name)
     {
         return Location(GlobalLocation{std::move(name)});
+    }
+
+    static Location SimdRegister(Index index, OperandWidth width) noexcept
+    {
+        return Location(SimdRegisterLocation{index, width});
+    }
+
+    static Location IncomingStack(Index index) noexcept
+    {
+        return Location(IncomingStackLocation{index});
     }
 
     Kind GetKind() const noexcept
@@ -125,6 +147,16 @@ public:
         return std::get_if<GlobalLocation>(&value);
     }
 
+    const SimdRegisterLocation* AsSimdRegister() const noexcept
+    {
+        return std::get_if<SimdRegisterLocation>(&value);
+    }
+
+    const IncomingStackLocation* AsIncomingStack() const noexcept
+    {
+        return std::get_if<IncomingStackLocation>(&value);
+    }
+
     const Value& GetValue() const noexcept
     {
         return value;
@@ -140,6 +172,14 @@ private:
     }
 
     explicit Location(GlobalLocation location) : value(std::move(location))
+    {
+    }
+
+    explicit Location(SimdRegisterLocation location) noexcept : value(location)
+    {
+    }
+
+    explicit Location(IncomingStackLocation location) noexcept : value(location)
     {
     }
 

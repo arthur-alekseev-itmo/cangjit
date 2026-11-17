@@ -55,6 +55,15 @@ void DumpLocation(const Location& location, std::ostream& output)
         return;
     }
 
+    if (const auto* reg = location.AsSimdRegister()) {
+        output << "XMM(" << reg->index << ')';
+        return;
+    }
+    if (const auto* stack = location.AsIncomingStack()) {
+        output << "INCOMING_STACK(" << stack->index << ')';
+        return;
+    }
+
     const auto* global = location.AsGlobal();
     assert(global != nullptr);
     output << "GLOBAL(" << global->name << ')';

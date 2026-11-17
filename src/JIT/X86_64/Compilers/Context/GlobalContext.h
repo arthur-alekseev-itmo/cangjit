@@ -9,8 +9,10 @@
 
 #include <asmjit/core.h>
 
+#include "../../LazyCalls/FunctionRegistry.h"
+#include "../../LazyCalls/FunctionResolver.h"
+
 namespace Cangjie::JIT::X86_64 {
-/// Owns executable allocations for the lifetime of a JIT execution.
 class GlobalContext final {
 public:
     asmjit::JitRuntime& GetRuntime() noexcept
@@ -18,8 +20,20 @@ public:
         return runtime;
     }
 
+    FunctionRegistry& GetFunctionRegistry() noexcept
+    {
+        return functionRegistry;
+    }
+
+    FunctionResolver& GetFunctionResolver() noexcept
+    {
+        return functionResolver;
+    }
+
 private:
     asmjit::JitRuntime runtime;
+    FunctionRegistry functionRegistry;
+    FunctionResolver functionResolver;
 };
 } // namespace Cangjie::JIT::X86_64
 

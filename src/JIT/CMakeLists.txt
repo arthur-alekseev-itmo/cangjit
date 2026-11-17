@@ -21,6 +21,7 @@ if(CANGJIE_JIT_X86_64)
         X86_64/*.cpp
         X86_64/Compilers/*.cpp
         X86_64/Compilers/Context/*.cpp
+        X86_64/LazyCalls/*.cpp
         X86_64/RegisterAllocation/*.cpp
         X86_64/Utils/*.cpp)
     add_library(CangjieJIT STATIC ${JIT_X86_64_SRC})
