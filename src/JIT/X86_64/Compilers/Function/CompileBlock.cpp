@@ -6,12 +6,12 @@
 
 #include "CompileBlock.h"
 
-#include "CompileBinaryExpression.h"
-#include "CompileBranch.h"
-#include "CompileExit.h"
-#include "CompileGoTo.h"
-#include "CompileUnaryExpression.h"
-#include "Context/FunctionContext.h"
+#include "../Expression/CompileBinaryExpression.h"
+#include "../Expression/CompileBranch.h"
+#include "../Expression/CompileExit.h"
+#include "../Expression/CompileGoTo.h"
+#include "../Expression/CompileUnaryExpression.h"
+#include "../Context/FunctionContext.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Expression/Terminator.h"
 #include "cangjie/CHIR/IR/Value/Value.h"

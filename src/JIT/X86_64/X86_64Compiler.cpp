@@ -6,7 +6,7 @@
 
 #include "X86_64Compiler.h"
 
-#include "Compilers/CompileFunction.h"
+#include "Compilers/Function/CompileFunction.h"
 #include "Compilers/Context/GlobalContext.h"
 
 #include "cangjie/CHIR/IR/Package.h"

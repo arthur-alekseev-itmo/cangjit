@@ -19,7 +19,8 @@ if(CANGJIE_JIT_X86_64)
 
     file(GLOB JIT_X86_64_SRC CONFIGURE_DEPENDS
         X86_64/*.cpp
-        X86_64/Compilers/*.cpp
+        X86_64/Compilers/Function/*.cpp
+        X86_64/Compilers/Expression/*.cpp
         X86_64/Compilers/Context/*.cpp
         X86_64/LazyCalls/*.cpp
         X86_64/RegisterAllocation/*.cpp

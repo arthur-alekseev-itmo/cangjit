@@ -18,10 +18,6 @@ class FunctionContext;
 class GlobalContext;
 
 
-/// Runs the x86-64 compilation pipeline for one CHIR function.
-/// Emission supports scalar integer/boolean operations and control flow; other
-/// CHIR expressions and arithmetic overflow strategies are reported as errors.
-/// The stream overload emits diagnostics but does not execute the generated code.
 class CompileFunction final {
 public:
     CompileFunction(GlobalContext& globalContext, const CHIR::Function& function) noexcept;

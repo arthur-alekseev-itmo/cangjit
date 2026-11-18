@@ -6,7 +6,7 @@
 
 #include "CompileGoTo.h"
 
-#include "Context/FunctionContext.h"
+#include "../Context/FunctionContext.h"
 #include "cangjie/CHIR/IR/Expression/Terminator.h"
 
 namespace Cangjie::JIT::X86_64 {

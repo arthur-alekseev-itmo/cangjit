@@ -9,13 +9,13 @@
 #include <iostream>
 #include <utility>
 
-#include "../RegisterAllocation/LivenessInterferenceGraphBuilder.h"
-#include "../RegisterAllocation/TrivialStackRegalloc.h"
-#include "../RegisterAllocation/ValueNumeration.h"
-#include "../Utils/MemoryUtils.h"
-#include "../Utils/StackFrameUtils.h"
+#include "../../RegisterAllocation/LivenessInterferenceGraphBuilder.h"
+#include "../../RegisterAllocation/TrivialStackRegalloc.h"
+#include "../../RegisterAllocation/ValueNumeration.h"
+#include "../../Utils/MemoryUtils.h"
+#include "../../Utils/StackFrameUtils.h"
 #include "CompileBlock.h"
-#include "Context/FunctionContext.h"
+#include "../Context/FunctionContext.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
 

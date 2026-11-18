@@ -6,7 +6,7 @@
 
 #include "CompileExit.h"
 
-#include "Context/FunctionContext.h"
+#include "../Context/FunctionContext.h"
 
 namespace Cangjie::JIT::X86_64 {
 void CompileExit::Compile(FunctionContext& ctx, const CHIR::Exit&)

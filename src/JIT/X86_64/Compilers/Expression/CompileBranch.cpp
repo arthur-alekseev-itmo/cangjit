@@ -6,8 +6,8 @@
 
 #include "CompileBranch.h"
 
-#include "../Utils/MemoryUtils.h"
-#include "Context/FunctionContext.h"
+#include "../../Utils/MemoryUtils.h"
+#include "../Context/FunctionContext.h"
 #include "cangjie/CHIR/IR/Expression/Terminator.h"
 #include "cangjie/CHIR/IR/Type/Type.h"
 #include "cangjie/CHIR/IR/Value/Value.h"

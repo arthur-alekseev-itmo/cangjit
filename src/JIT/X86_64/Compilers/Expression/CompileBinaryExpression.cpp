@@ -4,9 +4,9 @@
 
 #include "CompileBinaryExpression.h"
 
-#include "../Utils/MemoryUtils.h"
-#include "../Utils/RegisterUtils.h"
-#include "Context/FunctionContext.h"
+#include "../../Utils/MemoryUtils.h"
+#include "../../Utils/RegisterUtils.h"
+#include "../Context/FunctionContext.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Type/Type.h"
 
