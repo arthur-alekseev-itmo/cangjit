@@ -8,10 +8,12 @@
 
 #include "../Expression/CompileApply.h"
 #include "../Expression/CompileBinaryExpression.h"
+#include "../Expression/CompileConstant.h"
 #include "../Expression/CompileBranch.h"
 #include "../Expression/CompileExit.h"
 #include "../Expression/CompileGoTo.h"
 #include "../Expression/CompileUnaryExpression.h"
+#include "../Expression/CompileNumericCast.h"
 #include "../Context/FunctionContext.h"
 #include "../../Utils/MemoryUtils.h"
 #include "../../Utils/RegisterUtils.h"
@@ -124,6 +126,12 @@ void CompileBlock::CompileExpression(FunctionContext& context, const CHIR::Expre
     switch (expression.GetExprKind()) {
         case CHIR::ExprKind::APPLY:
             CompileApply::Compile(context, static_cast<const CHIR::Apply&>(expression));
+            break;
+        case CHIR::ExprKind::CONSTANT:
+            CompileConstant::Compile(context, static_cast<const CHIR::Constant&>(expression));
+            break;
+        case CHIR::ExprKind::NUMERIC_CAST:
+            CompileNumericCast::Compile(context, static_cast<const CHIR::NumericCast&>(expression));
             break;
         case CHIR::ExprKind::ALLOCATE:
             CompileAllocate(context, static_cast<const CHIR::Allocate&>(expression));

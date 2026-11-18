@@ -20,6 +20,8 @@ JIT_FAILURE(InvalidUnaryOperandOrType, "unary expression has missing or incompat
 JIT_FAILURE(UnsupportedUnaryOperationOrType, "unsupported unary operation or operand type")
 JIT_FAILURE(UnsupportedUnaryOverflow, "unsupported unary negation overflow strategy")
 JIT_FAILURE(UnsupportedUnaryOperation, "unsupported unary operation")
+JIT_FAILURE(UnsupportedNumericCast, "numeric cast requires integer source and target types")
+JIT_FAILURE(UnsupportedNumericCastOverflow, "unsupported numeric cast overflow strategy")
 JIT_FAILURE(InvalidBranch, "Branch requires a boolean condition and two destinations")
 JIT_FAILURE(MissingGoToDestination, "GoTo has no destination")
 JIT_FAILURE(MissingOperand, "missing operand")
