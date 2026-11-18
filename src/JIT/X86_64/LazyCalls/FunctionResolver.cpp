@@ -19,7 +19,7 @@ CompilationResult FunctionResolver::Resolve(FunctionRecord& record, Materialize 
         return CompilationError{"recursive materialization of the same function"};
     }
     if (record.GetState() == FunctionState::READY) {
-        return record.GetTargetSlot();
+        return record.GetCompiledTarget();
     }
     if (record.GetState() == FunctionState::FAILED) {
         return CompilationError{record.GetError()};

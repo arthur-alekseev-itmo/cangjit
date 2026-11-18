@@ -9,14 +9,14 @@
 
 #include <cstdint>
 #include <string>
-#include <variant>
+
+#include "../Types.h"
 
 namespace Cangjie::CHIR {
 class Function;
 }
 
 namespace Cangjie::JIT::X86_64 {
-using CodeAddress = uintptr_t;
 
 enum class FunctionState : uint8_t {
     UNINITIALIZED,
@@ -26,20 +26,15 @@ enum class FunctionState : uint8_t {
     FAILED,
 };
 
-struct CompilationError {
-    std::string message;
-};
-using CompilationResult = std::variant<CodeAddress, CompilationError>;
 
 class FunctionRecord final {
 public:
     explicit FunctionRecord(const CHIR::Function& function) noexcept;
 
-    bool Initialize(CodeAddress entryStub, CodeAddress resolverThunk);
+    bool Initialize(CodeAddress entryStub);
     const CHIR::Function& GetFunction() const noexcept;
     CodeAddress GetEntryStub() const;
-    CodeAddress GetResolverThunk() const;
-    const CodeAddress& GetTargetSlot() const noexcept;
+    CodeAddress GetCompiledTarget() const noexcept;
     FunctionState GetState() const noexcept;
     const std::string& GetError() const noexcept;
     bool BeginCompilation();
@@ -49,8 +44,7 @@ public:
 private:
     const CHIR::Function& function;
     CodeAddress entryStub = 0;
-    CodeAddress resolverThunk = 0;
-    CodeAddress target = 0;
+    CodeAddress compiledTarget = 0;
     FunctionState state = FunctionState::UNINITIALIZED;
     std::string error;
 };

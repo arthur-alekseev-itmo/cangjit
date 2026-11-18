@@ -11,17 +11,15 @@ FunctionRecord::FunctionRecord(const CHIR::Function& function) noexcept : functi
 {
 }
 
-bool FunctionRecord::Initialize(CodeAddress newEntryStub, CodeAddress newResolverThunk)
+bool FunctionRecord::Initialize(CodeAddress newEntryStub)
 {
-    if (newEntryStub == 0 || newResolverThunk == 0) {
+    if (newEntryStub == 0) {
         return false;
     }
     if (state != FunctionState::UNINITIALIZED) {
-        return entryStub == newEntryStub && resolverThunk == newResolverThunk;
+        return entryStub == newEntryStub;
     }
     entryStub = newEntryStub;
-    resolverThunk = newResolverThunk;
-    target = resolverThunk;
     state = FunctionState::UNCOMPILED;
     return true;
 }
@@ -36,15 +34,12 @@ CodeAddress FunctionRecord::GetEntryStub() const
     return entryStub;
 }
 
-CodeAddress FunctionRecord::GetResolverThunk() const
+
+CodeAddress FunctionRecord::GetCompiledTarget() const noexcept
 {
-    return resolverThunk;
+    return compiledTarget;
 }
 
-const CodeAddress& FunctionRecord::GetTargetSlot() const noexcept
-{
-    return target;
-}
 
 FunctionState FunctionRecord::GetState() const noexcept
 {
@@ -72,8 +67,8 @@ CompilationResult FunctionRecord::CompleteCompilation(CompilationResult result)
         return CompilationError{"function is not being materialized"};
     }
     if (const auto* address = std::get_if<CodeAddress>(&result)) {
-        if (*address != 0 && *address != entryStub && *address != resolverThunk) {
-            target = *address;
+        if (*address != 0 && *address != entryStub) {
+            compiledTarget = *address;
             state = FunctionState::READY;
             return result;
         }

@@ -11,6 +11,7 @@
 
 #include <iosfwd>
 #include <unordered_map>
+#include <vector>
 
 #include "JitFailure.h"
 #include "../../RegisterAllocation/InterferenceGraph.h"
@@ -25,8 +26,6 @@ class Function;
 namespace Cangjie::JIT::X86_64 {
 class GlobalContext;
 
-/// State owned by the compilation of one CHIR function.
-/// The function and all values referenced by the numeration must outlive this context.
 class FunctionContext final {
 public:
     FunctionContext(GlobalContext& globalContext, const CHIR::Function* function, ValueNumeration valueNumeration,
@@ -41,6 +40,8 @@ public:
     void Fail(JitFailureKind kind, std::optional<CHIR::ExprKind> expressionKind = std::nullopt) noexcept;
     const std::optional<JitFailure>& GetFailure() const noexcept;
     const CHIR::Function* GetFunction() const noexcept;
+    std::vector<const CHIR::Function*>& GetFunctionsToStub() noexcept;
+    const std::vector<const CHIR::Function*>& GetFunctionsToStub() const noexcept;
     const ValueNumeration& GetValueNumeration() const noexcept;
     const InterferenceGraph& GetInterferenceGraph() const noexcept;
     const RegisterAllocation& GetRegisterAllocation() const noexcept;
@@ -68,6 +69,7 @@ private:
     asmjit::Label epilogueLabel;
     std::unordered_map<const CHIR::Block*, asmjit::Label> blockLabels;
     const CHIR::Function* function;
+    std::vector<const CHIR::Function*> functionsToStub;
     ValueNumeration valueNumeration;
     InterferenceGraph interferenceGraph;
     RegisterAllocation registerAllocation;

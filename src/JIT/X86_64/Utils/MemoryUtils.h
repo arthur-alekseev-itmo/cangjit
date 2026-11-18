@@ -9,6 +9,9 @@
 
 #include <asmjit/x86.h>
 
+#include <cstddef>
+#include <cstdint>
+
 namespace Cangjie::CHIR {
 class Value;
 }
@@ -17,14 +20,17 @@ namespace Cangjie::JIT::X86_64 {
 class FunctionContext;
 class Location;
 
-/// Emits scalar moves. Stack locations are eight-byte frame-pointer-relative slots.
 class MemoryUtils final {
 public:
     static bool LoadValue(FunctionContext& context, const CHIR::Value* value, const asmjit::x86::Gp& target);
     static bool StoreValue(FunctionContext& context, const CHIR::Value* value, const asmjit::x86::Gp& source);
+    static void ReserveStack(FunctionContext& context, uint32_t size);
+    static void ReleaseStack(FunctionContext& context, uint32_t size);
+    static bool StoreOutgoingArgument(FunctionContext& context, const CHIR::Value* value, size_t index,
+        uint32_t stackSize);
+    static bool ZeroStackValueAndLoadAddress(
+        FunctionContext& context, const CHIR::Value* value, const asmjit::x86::Gp& target);
 
-    /// Moves between stack slots and 64-bit registers. For a stack-to-stack move,
-    /// scratch must be a caller-owned 64-bit register other than RBP or RSP.
     static bool Move(FunctionContext& context, const Location& destination, const Location& source,
         const asmjit::x86::Gp& scratch);
 };

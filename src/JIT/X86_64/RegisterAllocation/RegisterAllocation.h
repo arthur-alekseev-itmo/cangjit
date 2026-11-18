@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <iosfwd>
+#include <optional>
 #include <vector>
 
 #include "../Location.h"
@@ -18,15 +19,18 @@ namespace Cangjie::JIT::X86_64 {
 
 class RegisterAllocation final {
 public:
-    RegisterAllocation(std::vector<Location> locations, size_t stackSlotCount) noexcept;
+    RegisterAllocation(std::vector<Location> locations, size_t stackSlotCount,
+        std::vector<std::optional<size_t>> allocationSlots = {}) noexcept;
 
     const Location& GetLocation(ValueNumeration::Id valueId) const noexcept;
     size_t GetLocationCount() const noexcept;
     size_t GetStackSlotCount() const noexcept;
+    std::optional<size_t> GetAllocationSlot(ValueNumeration::Id valueId) const noexcept;
     void Dump(std::ostream& output) const;
 
 private:
     std::vector<Location> locations;
+    std::vector<std::optional<size_t>> allocationSlots;
     size_t stackSlotCount;
 };
 

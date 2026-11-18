@@ -15,7 +15,6 @@ enum class ExprKind : uint8_t;
 }
 
 namespace Cangjie::JIT::X86_64 {
-/// Typed categories for JIT compilation failures. AsmJit failures retain their native error code.
 enum class JitFailureKind : uint8_t {
 #define JIT_FAILURE(name, message) name,
 #include "JitFailures.inc"

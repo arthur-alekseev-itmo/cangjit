@@ -4,7 +4,9 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#include "CallingConvention.h"
+#include "SystemVCallingConvention.h"
+
+#include "StackFrameUtils.h"
 
 #include <array>
 
@@ -75,23 +77,22 @@ std::optional<bool> HasIndirectReturn(const Type& type)
 }
 } // namespace
 
-std::optional<CallingConvention::ParameterLocations> CallingConvention::GetParameterLocations(
-    const CHIR::Function& function)
+std::optional<ParameterPlacement> SystemVCallingConvention::GetParameterPlacement(const CHIR::Function& function)
 {
-    if (function.IsCFunc() || function.GetFuncType()->HasVarArg() || !function.GetReturnType()) {
+    if (function.IsCFunc() || !function.GetFuncType() || function.GetFuncType()->HasVarArg() ||
+        !function.GetReturnType()) {
         return std::nullopt;
     }
     const auto indirectReturn = HasIndirectReturn(*function.GetReturnType());
     if (!indirectReturn) {
         return std::nullopt;
     }
-
     size_t integerIndex = *indirectReturn ? 1 : 0;
     size_t simdIndex = 0;
     size_t stackIndex = 0;
-    ParameterLocations locations;
-    locations.reserve(function.GetParams().size());
-    for (auto* parameter : function.GetParams()) {
+    ParameterPlacement placement;
+    placement.locations.reserve(function.GetParams().size());
+    for (const auto* parameter : function.GetParams()) {
         if (!parameter || !parameter->GetType()) {
             return std::nullopt;
         }
@@ -99,26 +100,34 @@ std::optional<CallingConvention::ParameterLocations> CallingConvention::GetParam
         switch (Classify(type)) {
             case ArgumentClass::INTEGER:
                 if (integerIndex < INTEGER_REGISTERS.size()) {
-                    locations.emplace(parameter, Location::Register(integerIndex, INTEGER_REGISTERS[integerIndex],
-                        Width(type)));
+                    if (!placement.locations.emplace(parameter,
+                        Location::Register(integerIndex, INTEGER_REGISTERS[integerIndex], Width(type))).second) {
+                        return std::nullopt;
+                    }
                     ++integerIndex;
-                } else {
-                    locations.emplace(parameter, Location::IncomingStack(stackIndex++));
+                } else if (!placement.locations.emplace(parameter, Location::IncomingStack(stackIndex++)).second) {
+                    return std::nullopt;
                 }
                 break;
             case ArgumentClass::SIMD:
                 if (simdIndex < SIMD_REGISTER_COUNT) {
-                    locations.emplace(parameter, Location::SimdRegister(simdIndex++, Width(type)));
-                } else {
-                    locations.emplace(parameter, Location::IncomingStack(stackIndex++));
+                    if (!placement.locations.emplace(parameter, Location::SimdRegister(simdIndex++, Width(type))).second) {
+                        return std::nullopt;
+                    }
+                } else if (!placement.locations.emplace(parameter, Location::IncomingStack(stackIndex++)).second) {
+                    return std::nullopt;
                 }
                 break;
             case ArgumentClass::UNSUPPORTED:
-                return std::nullopt;
             default:
                 return std::nullopt;
         }
     }
-    return locations;
+    const auto stackSize = StackFrameUtils::GetFrameSize(stackIndex);
+    if (!stackSize) {
+        return std::nullopt;
+    }
+    placement.stackSize = *stackSize;
+    return placement;
 }
 } // namespace Cangjie::JIT::X86_64

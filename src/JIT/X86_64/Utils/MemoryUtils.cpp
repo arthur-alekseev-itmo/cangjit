@@ -6,6 +6,8 @@
 
 #include "MemoryUtils.h"
 
+#include <limits>
+
 #include "RegisterUtils.h"
 #include "StackFrameUtils.h"
 
@@ -122,6 +124,59 @@ bool MemoryUtils::StoreValue(FunctionContext& context, const CHIR::Value* value,
     } else {
         assembler.mov(destination.memory, source);
     }
+    return context.GetError() == asmjit::kErrorOk;
+}
+
+void MemoryUtils::ReserveStack(FunctionContext& context, uint32_t size)
+{
+    if (size != 0) {
+        context.GetAssembler().sub(asmjit::x86::rsp, size);
+    }
+}
+
+void MemoryUtils::ReleaseStack(FunctionContext& context, uint32_t size)
+{
+    if (size != 0) {
+        context.GetAssembler().add(asmjit::x86::rsp, size);
+    }
+}
+
+bool MemoryUtils::StoreOutgoingArgument(
+    FunctionContext& context, const CHIR::Value* value, size_t index, uint32_t stackSize)
+{
+    constexpr size_t SLOT_SIZE = sizeof(uint64_t);
+    if (index >= stackSize / SLOT_SIZE || index > static_cast<size_t>(std::numeric_limits<int32_t>::max()) / SLOT_SIZE) {
+        context.Fail(JitFailureKind::UnsupportedCallingConvention);
+        return false;
+    }
+    if (!LoadValue(context, value, asmjit::x86::rax)) {
+        return false;
+    }
+    context.GetAssembler().mov(
+        asmjit::x86::qword_ptr(asmjit::x86::rsp, static_cast<int32_t>(index * SLOT_SIZE)), asmjit::x86::rax);
+    return context.GetError() == asmjit::kErrorOk;
+}
+
+bool MemoryUtils::ZeroStackValueAndLoadAddress(
+    FunctionContext& context, const CHIR::Value* value, const asmjit::x86::Gp& target)
+{
+    if (!IsMoveRegister(context, target)) {
+        return false;
+    }
+    const auto& allocation = context.GetRegisterAllocation();
+    const auto id = context.GetValueNumeration().GetId(value);
+    const auto* location = id && *id < allocation.GetLocationCount()
+        ? allocation.GetLocation(*id).AsStack() : nullptr;
+    const auto offset = location
+        ? StackFrameUtils::GetSlotOffset(location->index, allocation.GetStackSlotCount()) : std::nullopt;
+    if (!offset) {
+        context.Fail(JitFailureKind::UnallocatedResult);
+        return false;
+    }
+    auto& assembler = context.GetAssembler();
+    const auto memory = asmjit::x86::qword_ptr(asmjit::x86::rbp, *offset);
+    assembler.mov(memory, 0);
+    assembler.lea(target, memory);
     return context.GetError() == asmjit::kErrorOk;
 }
 

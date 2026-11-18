@@ -101,6 +101,16 @@ const CHIR::Function* FunctionContext::GetFunction() const noexcept
     return function;
 }
 
+std::vector<const CHIR::Function*>& FunctionContext::GetFunctionsToStub() noexcept
+{
+    return functionsToStub;
+}
+
+const std::vector<const CHIR::Function*>& FunctionContext::GetFunctionsToStub() const noexcept
+{
+    return functionsToStub;
+}
+
 const ValueNumeration& FunctionContext::GetValueNumeration() const noexcept
 {
     return valueNumeration;

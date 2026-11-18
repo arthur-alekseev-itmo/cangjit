@@ -70,8 +70,9 @@ void DumpLocation(const Location& location, std::ostream& output)
 }
 } // namespace
 
-RegisterAllocation::RegisterAllocation(std::vector<Location> locations, size_t stackSlotCount) noexcept
-    : locations(std::move(locations)), stackSlotCount(stackSlotCount)
+RegisterAllocation::RegisterAllocation(std::vector<Location> locations, size_t stackSlotCount,
+    std::vector<std::optional<size_t>> allocationSlots) noexcept
+    : locations(std::move(locations)), allocationSlots(std::move(allocationSlots)), stackSlotCount(stackSlotCount)
 {
 }
 
@@ -89,6 +90,11 @@ size_t RegisterAllocation::GetLocationCount() const noexcept
 size_t RegisterAllocation::GetStackSlotCount() const noexcept
 {
     return stackSlotCount;
+}
+
+std::optional<size_t> RegisterAllocation::GetAllocationSlot(ValueNumeration::Id valueId) const noexcept
+{
+    return valueId < allocationSlots.size() ? allocationSlots[valueId] : std::nullopt;
 }
 
 void RegisterAllocation::Dump(std::ostream& output) const

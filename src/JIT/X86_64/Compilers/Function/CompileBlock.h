@@ -15,7 +15,6 @@ class Expression;
 namespace Cangjie::JIT::X86_64 {
 class FunctionContext;
 
-/// Emits one CHIR block, binding its shared label before its expressions.
 class CompileBlock final {
 public:
     static void Compile(FunctionContext& context, const CHIR::Block& block);

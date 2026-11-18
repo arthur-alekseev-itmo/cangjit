@@ -7,16 +7,21 @@
 #include "CompileFunction.h"
 
 #include <iostream>
+#include <limits>
 #include <utility>
 
 #include "../../RegisterAllocation/LivenessInterferenceGraphBuilder.h"
 #include "../../RegisterAllocation/TrivialStackRegalloc.h"
 #include "../../RegisterAllocation/ValueNumeration.h"
+#include "../../Utils/SystemVCallingConvention.h"
 #include "../../Utils/MemoryUtils.h"
+#include "../../Utils/RegisterUtils.h"
 #include "../../Utils/StackFrameUtils.h"
 #include "CompileBlock.h"
+#include "../Context/GlobalContext.h"
 #include "../Context/FunctionContext.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
+#include "cangjie/CHIR/IR/Type/Type.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
 
 namespace Cangjie::JIT::X86_64 {
@@ -52,6 +57,43 @@ void CompileFunction::Compile(std::ostream& output) const
         std::cerr << "JIT emission failed: " << asmjit::DebugUtils::errorAsString(context.GetError()) << '\n';
         output.setstate(std::ios::badbit);
     }
+}
+
+CompilationResult CompileFunction::CompileToAddress() const
+{
+#if !defined(__x86_64__) || defined(_WIN32)
+    return CompilationError{"only the x86-64 System V ABI is supported"};
+#else
+    if (!function.GetBody() || !function.GetBody()->GetEntryBlock() || !function.GetReturnType() ||
+        !function.GetFuncType()) {
+        return CompilationError{"invalid function"};
+    }
+    auto valueNumeration = ValueNumerator(function).Run();
+    auto interferenceGraph = LivenessInterferenceGraphBuilder().Build(function, valueNumeration);
+    auto registerAllocation = TrivialStackRegalloc().Allocate(valueNumeration, interferenceGraph);
+    FunctionContext context(globalContext, &function, std::move(valueNumeration), std::move(interferenceGraph),
+        std::move(registerAllocation));
+    if (context.GetError() == asmjit::kErrorOk && !context.GetFailure()) {
+        Compile(context);
+    }
+    if (const auto& failure = context.GetFailure()) {
+        std::string message = GetJitFailureMessage(failure->kind);
+        if (failure->expressionKind) {
+            message += ": ";
+            message += CHIR::ExprKindMgr::Instance()->GetKindName(static_cast<size_t>(*failure->expressionKind));
+        }
+        return CompilationError{std::move(message)};
+    }
+    if (context.GetError() != asmjit::kErrorOk) {
+        return CompilationError{asmjit::DebugUtils::errorAsString(context.GetError())};
+    }
+    void* address = nullptr;
+    const auto error = globalContext.GetRuntime().add(&address, &context.GetCode());
+    if (error != asmjit::kErrorOk) {
+        return CompilationError{asmjit::DebugUtils::errorAsString(error)};
+    }
+    return reinterpret_cast<CodeAddress>(address);
+#endif
 }
 
 void CompileFunction::MakePrologue(FunctionContext& context) const
@@ -95,13 +137,54 @@ void CompileFunction::Compile(FunctionContext& context) const
         context.Fail(JitFailureKind::InvalidFunctionContext);
         return;
     }
-    if (context.GetValueNumeration().GetParameterCount() != 0) {
-        context.Fail(JitFailureKind::UnsupportedParameters);
+    const auto placements = SystemVCallingConvention::GetParameterPlacement(function);
+    if (!placements) {
+        context.Fail(JitFailureKind::UnsupportedCallingConvention);
         return;
     }
     MakePrologue(context);
     if (context.GetFailure()) {
         return;
+    }
+    for (const auto* parameter : function.GetParams()) {
+        if (!parameter || !parameter->GetType()) {
+            context.Fail(JitFailureKind::UnsupportedParameters);
+            return;
+        }
+        const auto width = RegisterUtils::IntegerWidth(*parameter->GetType());
+        const auto location = placements->locations.find(parameter);
+        const auto id = context.GetValueNumeration().GetId(parameter);
+        if (!width || location == placements->locations.end() || !id ||
+            *id >= context.GetRegisterAllocation().GetLocationCount() ||
+            !context.GetRegisterAllocation().GetLocation(*id).IsStack()) {
+            context.Fail(JitFailureKind::UnsupportedParameters);
+            return;
+        }
+        auto& a = context.GetAssembler();
+        if (const auto* reg = location->second.AsRegister()) {
+            const auto source = RegisterUtils::Get64BitRegister(reg->type);
+            if (!source) {
+                context.Fail(JitFailureKind::UnsupportedParameters);
+                return;
+            }
+            a.mov(asmjit::x86::rax, *source);
+        } else if (const auto* stack = location->second.AsIncomingStack()) {
+            constexpr size_t BASE_OFFSET = 2 * sizeof(uint64_t);
+            if (stack->index > (static_cast<size_t>(std::numeric_limits<int32_t>::max()) - BASE_OFFSET) /
+                    sizeof(uint64_t)) {
+                context.Fail(JitFailureKind::UnsupportedParameters);
+                return;
+            }
+            const auto offset = static_cast<int32_t>(BASE_OFFSET + stack->index * sizeof(uint64_t));
+            a.mov(asmjit::x86::rax, asmjit::x86::qword_ptr(asmjit::x86::rbp, offset));
+        } else {
+            context.Fail(JitFailureKind::UnsupportedParameters);
+            return;
+        }
+        RegisterUtils::NormalizeInteger(a, asmjit::x86::rax, width, parameter->GetType()->IsSignedInteger());
+        if (!MemoryUtils::StoreValue(context, parameter, asmjit::x86::rax)) {
+            return;
+        }
     }
     auto& assembler = context.GetAssembler();
     assembler.jmp(context.GetBlockLabel(function.GetBody()->GetEntryBlock()));

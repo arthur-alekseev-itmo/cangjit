@@ -4,12 +4,13 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-// JIT_FAILURE(identifier, diagnostic message)
 JIT_FAILURE(InvalidFunctionContext, "invalid function context or missing entry block")
 JIT_FAILURE(UnsupportedParameters, "function parameters are not supported")
 JIT_FAILURE(StackFrameTooLarge, "stack frame is too large")
 JIT_FAILURE(UnsupportedReturnType, "unsupported function return type")
 JIT_FAILURE(UnsupportedExpression, "unsupported expression")
+JIT_FAILURE(UnsupportedAllocation, "allocation requires a scalar integer or boolean type and a stack slot")
+JIT_FAILURE(UnsupportedMemoryAccess, "load or store requires a matching scalar integer or boolean reference")
 JIT_FAILURE(MissingBinaryOperandOrType, "binary expression has missing operand or type")
 JIT_FAILURE(IncompatibleBinaryTypes, "binary expression has incompatible operand or result types")
 JIT_FAILURE(UnsupportedBinaryOperation, "unsupported binary operation or operand type")
@@ -34,7 +35,6 @@ JIT_FAILURE(InvalidMoveScratch, "stack-to-stack move requires a 64-bit scratch r
 JIT_FAILURE(MissingBranchDestination, "missing branch destination")
 JIT_FAILURE(EpilogueLabelCreationFailed, "failed to create epilogue label")
 JIT_FAILURE(BlockLabelCreationFailed, "failed to create block label")
-// Anticipated failures for deferred calls and executable-code publication.
 JIT_FAILURE(UnresolvedLabel, "unresolved code label")
 JIT_FAILURE(UnresolvedSymbol, "unresolved JIT symbol")
 JIT_FAILURE(UnsupportedCallingConvention, "unsupported calling convention")

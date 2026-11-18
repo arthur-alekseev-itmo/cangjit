@@ -14,8 +14,6 @@
 
 namespace Cangjie::JIT::X86_64 {
 
-/// Physical x86-64 general-purpose registers. Allocation policy decides which
-/// registers are available; a Location can represent reserved registers too.
 enum class RegisterType : uint8_t {
     RAX,
     RBX,
@@ -36,7 +34,6 @@ enum class RegisterType : uint8_t {
     COUNT,
 };
 
-/// Width of the low register view used by an instruction operand.
 enum class OperandWidth : uint8_t {
     BYTE,
     WORD,
@@ -45,10 +42,6 @@ enum class OperandWidth : uint8_t {
     COUNT,
 };
 
-/// A storage location assigned to a JIT value.
-///
-/// A Location is always valid: values that have not been assigned a location
-/// should be represented by std::optional<Location> at the call site.
 class Location final {
 public:
     using Index = size_t;

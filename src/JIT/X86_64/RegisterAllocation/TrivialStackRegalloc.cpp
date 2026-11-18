@@ -12,6 +12,8 @@
 
 #include "InterferenceGraph.h"
 #include "ValueNumeration.h"
+#include "cangjie/CHIR/IR/Expression/Expression.h"
+#include "cangjie/CHIR/IR/Value/Value.h"
 
 namespace Cangjie::JIT::X86_64 {
 
@@ -24,10 +26,19 @@ RegisterAllocation TrivialStackRegalloc::Allocate(
 
     std::vector<Location> locations;
     locations.reserve(valueCount);
+    std::vector<std::optional<size_t>> allocationSlots(valueCount);
+    size_t stackSlotCount = valueCount;
     for (ValueNumeration::Id valueId = 0; valueId < valueCount; ++valueId) {
         locations.push_back(Location::Stack(static_cast<Location::Index>(valueId)));
+        const auto* value = numeration.GetValue(valueId);
+        if (value->IsLocalVar()) {
+            const auto* expression = static_cast<const CHIR::LocalVar*>(value)->GetExpr();
+            if (expression && expression->GetExprKind() == CHIR::ExprKind::ALLOCATE) {
+                allocationSlots[valueId] = stackSlotCount++;
+            }
+        }
     }
-    return RegisterAllocation(std::move(locations), valueCount);
+    return RegisterAllocation(std::move(locations), stackSlotCount, std::move(allocationSlots));
 }
 
 } // namespace Cangjie::JIT::X86_64
