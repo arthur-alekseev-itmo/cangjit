@@ -700,6 +700,7 @@ std::unordered_map<Options::ID, std::function<bool(GlobalOptions&, OptionArgInst
     { Options::ID::INCRE_COMPILE, OPTION_TRUE_ACTION(opts.enIncrementalCompilation = true) },
     { Options::ID::INCRE_DEBUG, OPTION_TRUE_ACTION(opts.printIncrementalInfo = true) },
     { Options::ID::DUMP_DEPENDENT_PACKAGE, OPTION_TRUE_ACTION(opts.scanDepPkg = true) },
+    { Options::ID::JIT, OPTION_TRUE_ACTION(opts.jit = true) },
     { Options::ID::NO_SUB_PACKAGE, OPTION_TRUE_ACTION(opts.noSubPkg = true) },
 
     // ---------- GENERAL DEBUG CONTROL OPTIONS ----------
