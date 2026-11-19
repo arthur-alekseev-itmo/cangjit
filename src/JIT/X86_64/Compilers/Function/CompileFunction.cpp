@@ -31,37 +31,11 @@ CompileFunction::CompileFunction(GlobalContext& globalContext, const CHIR::Funct
 {
 }
 
-void CompileFunction::Compile(std::ostream& output) const
-{
-    auto valueNumeration = ValueNumerator(function).Run();
-    auto interferenceGraph = LivenessInterferenceGraphBuilder().Build(function, valueNumeration);
-    auto registerAllocation = TrivialStackRegalloc().Allocate(valueNumeration, interferenceGraph);
-    FunctionContext context(globalContext, &function, std::move(valueNumeration), std::move(interferenceGraph),
-        std::move(registerAllocation));
-    if (context.GetError() != asmjit::kErrorOk) {
-        std::cerr << "JIT initialization failed: " << asmjit::DebugUtils::errorAsString(context.GetError()) << '\n';
-        output.setstate(std::ios::badbit);
-        return;
-    }
-    context.Dump(output);
-    Compile(context);
-    if (const auto& failure = context.GetFailure()) {
-        std::cerr << "JIT compilation failed: " << GetJitFailureMessage(failure->kind);
-        if (failure->expressionKind) {
-            std::cerr << ": " << CHIR::ExprKindMgr::Instance()->GetKindName(
-                static_cast<size_t>(*failure->expressionKind));
-        }
-        std::cerr << '\n';
-        output.setstate(std::ios::badbit);
-    } else if (context.GetError() != asmjit::kErrorOk) {
-        std::cerr << "JIT emission failed: " << asmjit::DebugUtils::errorAsString(context.GetError()) << '\n';
-        output.setstate(std::ios::badbit);
-    }
-}
 
-CompilationResult CompileFunction::CompileToAddress() const
+CompilationResult CompileFunction::CompileToAddress(std::ostream* output) const
 {
 #if !defined(__x86_64__) || defined(_WIN32)
+    (void)output;
     return CompilationError{"only the x86-64 System V ABI is supported"};
 #else
     if (!function.GetBody() || !function.GetBody()->GetEntryBlock() || !function.GetReturnType() ||
@@ -74,6 +48,12 @@ CompilationResult CompileFunction::CompileToAddress() const
     FunctionContext context(globalContext, &function, std::move(valueNumeration), std::move(interferenceGraph),
         std::move(registerAllocation));
     if (context.GetError() == asmjit::kErrorOk && !context.GetFailure()) {
+        if (output) {
+            context.Dump(*output);
+            if (!*output) {
+                return CompilationError{"failed to write JIT dump"};
+            }
+        }
         Compile(context);
     }
     if (const auto& failure = context.GetFailure()) {

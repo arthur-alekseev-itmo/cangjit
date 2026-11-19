@@ -8,6 +8,10 @@
 
 #include "Compilers/Function/CompileFunction.h"
 #include "Compilers/Context/GlobalContext.h"
+#include <iostream>
+
+#include "cangjie/CHIR/IR/Type/Type.h"
+#include "cangjie/CHIR/IR/Value/Value.h"
 
 #include "cangjie/CHIR/IR/Package.h"
 #include "cangjie/Mangle/MangleUtils.h"
@@ -24,7 +28,20 @@ void X86_64Compiler::Compile(const CHIR::Package& package, std::ostream& output)
         if (function->GetIdentifierWithoutPrefix() != USER_MAIN_MANGLED_NAME) {
             continue;
         }
-        CompileFunction(*globalContext, *function).Compile(output);
+        if (!function->GetParams().empty() || !function->GetReturnType() ||
+            function->GetReturnType()->GetTypeKind() != CHIR::Type::TYPE_INT64) {
+            std::cerr << "JIT: unsupported user main signature\n";
+            output.setstate(std::ios::badbit);
+            return;
+        }
+        const auto result = CompileFunction(*globalContext, *function).CompileToAddress(&output);
+        if (const auto* error = std::get_if<CompilationError>(&result)) {
+            std::cerr << "JIT compilation failed: " << error->message << '\n';
+            output.setstate(std::ios::badbit);
+            return;
+        }
+        const auto entry = reinterpret_cast<int64_t (*)()>(std::get<CodeAddress>(result));
+        output << "JIT: main returned " << entry() << '\n';
         return;
     }
 }

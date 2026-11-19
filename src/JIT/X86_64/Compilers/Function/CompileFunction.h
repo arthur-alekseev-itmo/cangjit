@@ -24,8 +24,7 @@ class CompileFunction final {
 public:
     CompileFunction(GlobalContext& globalContext, const CHIR::Function& function) noexcept;
 
-    void Compile(std::ostream& output) const;
-    CompilationResult CompileToAddress() const;
+    CompilationResult CompileToAddress(std::ostream* output = nullptr) const;
     void Compile(FunctionContext& context) const;
 
 private:
