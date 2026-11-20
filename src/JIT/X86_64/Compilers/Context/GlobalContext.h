@@ -11,10 +11,13 @@
 
 #include "../../LazyCalls/FunctionRegistry.h"
 #include "../../LazyCalls/FunctionResolver.h"
+#include "../../LazyCalls/LazyCallSiteRegistry.h"
 
 namespace Cangjie::JIT::X86_64 {
 class GlobalContext final {
 public:
+    GlobalContext() noexcept : allocatorParams(MakeAllocatorParams()), runtime(&allocatorParams) {}
+
     asmjit::JitRuntime& GetRuntime() noexcept
     {
         return runtime;
@@ -29,10 +32,24 @@ public:
     {
         return functionResolver;
     }
+    LazyCallSiteRegistry& GetLazyCallSiteRegistry() noexcept
+    {
+        return lazyCallSites;
+    }
+
 
 private:
+    static asmjit::JitAllocator::CreateParams MakeAllocatorParams() noexcept
+    {
+        asmjit::JitAllocator::CreateParams params{};
+        params.options = asmjit::JitAllocatorOptions::kUseDualMapping;
+        return params;
+    }
+
+    asmjit::JitAllocator::CreateParams allocatorParams;
     asmjit::JitRuntime runtime;
     FunctionRegistry functionRegistry;
+    LazyCallSiteRegistry lazyCallSites;
     FunctionResolver functionResolver;
 };
 } // namespace Cangjie::JIT::X86_64

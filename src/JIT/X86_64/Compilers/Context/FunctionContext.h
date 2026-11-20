@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "JitFailure.h"
+#include "../../LazyCalls/LazyCallSiteRegistry.h"
 #include "../../RegisterAllocation/InterferenceGraph.h"
 #include "../../RegisterAllocation/RegisterAllocation.h"
 #include "../../RegisterAllocation/ValueNumeration.h"
@@ -41,6 +42,7 @@ public:
     const std::optional<JitFailure>& GetFailure() const noexcept;
     const CHIR::Function* GetFunction() const noexcept;
     std::vector<const CHIR::Function*>& GetFunctionsToStub() noexcept;
+    std::vector<PendingLazyCallSite>& GetLazyCallSites() noexcept;
     const std::vector<const CHIR::Function*>& GetFunctionsToStub() const noexcept;
     const ValueNumeration& GetValueNumeration() const noexcept;
     const InterferenceGraph& GetInterferenceGraph() const noexcept;
@@ -70,6 +72,7 @@ private:
     std::unordered_map<const CHIR::Block*, asmjit::Label> blockLabels;
     const CHIR::Function* function;
     std::vector<const CHIR::Function*> functionsToStub;
+    std::vector<PendingLazyCallSite> lazyCallSites;
     ValueNumeration valueNumeration;
     InterferenceGraph interferenceGraph;
     RegisterAllocation registerAllocation;

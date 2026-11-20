@@ -72,6 +72,11 @@ CompilationResult CompileFunction::CompileToAddress(std::ostream* output) const
     if (error != asmjit::kErrorOk) {
         return CompilationError{asmjit::DebugUtils::errorAsString(error)};
     }
+    if (!globalContext.GetLazyCallSiteRegistry().Register(
+            reinterpret_cast<CodeAddress>(address), context.GetCode().codeSize(), context.GetLazyCallSites())) {
+        globalContext.GetRuntime().release(address);
+        return CompilationError{"failed to register lazy call sites"};
+    }
     return reinterpret_cast<CodeAddress>(address);
 #endif
 }

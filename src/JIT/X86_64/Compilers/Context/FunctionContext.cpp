@@ -110,6 +110,11 @@ const std::vector<const CHIR::Function*>& FunctionContext::GetFunctionsToStub() 
 {
     return functionsToStub;
 }
+std::vector<PendingLazyCallSite>& FunctionContext::GetLazyCallSites() noexcept
+{
+    return lazyCallSites;
+}
+
 
 const ValueNumeration& FunctionContext::GetValueNumeration() const noexcept
 {

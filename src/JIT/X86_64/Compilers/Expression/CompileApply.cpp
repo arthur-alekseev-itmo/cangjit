@@ -122,8 +122,17 @@ void EmitCall(FunctionContext& context, const CHIR::Apply& expression, const CHI
     CodeAddress target, uint32_t stackSize)
 {
     auto& assembler = context.GetAssembler();
-    assembler.mov(x86::r11, asmjit::imm(target));
+    const auto instructionOffset = assembler.offset();
+    assembler.long_().mov(x86::r11, asmjit::imm(target));
     assembler.call(x86::r11);
+    auto& record = context.GetGlobalContext().GetFunctionRegistry().GetOrCreate(callee);
+    if (target == record.GetEntryStub()) {
+        if (assembler.offset() - instructionOffset != 13) {
+            context.Fail(JitFailureKind::InvalidLazyCallSite);
+            return;
+        }
+        context.GetLazyCallSites().push_back({instructionOffset + 2, assembler.offset(), &record});
+    }
     MemoryUtils::ReleaseStack(context, stackSize);
     const auto* returnType = callee.GetReturnType();
     if (!returnType->IsUnit() && !returnType->IsNothing() && !returnType->IsVoid()) {

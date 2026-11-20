@@ -28,11 +28,26 @@ CompilationResult Materialize(const CHIR::Function& function, void* context)
     return CompileFunction(*static_cast<GlobalContext*>(context), function).CompileToAddress();
 }
 
-CodeAddress Resolve(GlobalContext* context, FunctionRecord* record) noexcept
+CodeAddress ResolveAndPatch(GlobalContext* context, FunctionRecord* record, CodeAddress returnAddress) noexcept
 {
     try {
+        const auto* found = context->GetLazyCallSiteRegistry().Find(returnAddress);
+        if (!found || found->callee != record) {
+            std::fputs("JIT lazy call site is invalid\n", stderr);
+            std::abort();
+        }
+        const auto site = *found;
         auto result = context->GetFunctionResolver().Resolve(*record, Materialize, context);
         if (const auto* address = std::get_if<CodeAddress>(&result)) {
+            auto* allocator = context->GetRuntime().allocator();
+            JitAllocator::Span span;
+            const uint64_t target = *address;
+            if (allocator->query(span, reinterpret_cast<void*>(site.caller)) != kErrorOk ||
+                reinterpret_cast<CodeAddress>(span.rx()) != site.caller ||
+                allocator->write(span, site.immediateOffset, &target, sizeof(target)) != kErrorOk) {
+                std::fputs("JIT failed to patch lazy call site\n", stderr);
+                std::abort();
+            }
             return *address;
         }
         std::fprintf(stderr, "JIT lazy compilation failed: %s\n",
@@ -41,21 +56,6 @@ CodeAddress Resolve(GlobalContext* context, FunctionRecord* record) noexcept
         std::fputs("JIT lazy compilation failed with an exception\n", stderr);
     }
     std::abort();
-}
-
-constexpr size_t TARGET_ADDRESS_OFFSET = 2;
-
-void Publish(GlobalContext* context, FunctionRecord* record) noexcept
-{
-    auto* allocator = context->GetRuntime().allocator();
-    JitAllocator::Span span;
-    const auto entry = reinterpret_cast<void*>(record->GetEntryStub());
-    const auto target = static_cast<uint64_t>(record->GetCompiledTarget());
-    if (allocator->query(span, entry) != kErrorOk ||
-        allocator->write(span, TARGET_ADDRESS_OFFSET, &target, sizeof(target)) != kErrorOk) {
-        std::fputs("JIT failed to patch function stub\n", stderr);
-        std::abort();
-    }
 }
 
 bool SupportedSignature(const CHIR::Function& function, size_t& stackArguments)
@@ -85,11 +85,10 @@ class ResolverStubEmitter final {
 public:
     explicit ResolverStubEmitter(Assembler& assembler) : a(assembler) {}
 
-    bool Emit(GlobalContext& context, FunctionRecord& record, size_t stackArguments)
+    bool Emit(GlobalContext& context, FunctionRecord& record)
     {
-        SaveArguments(stackArguments);
-        ResolveAndCall(context, record);
-        PublishAndReturn(context, record);
+        SaveArguments();
+        ResolveAndJump(context, record);
         return ok;
     }
 
@@ -100,8 +99,7 @@ private:
         ok = ok && error == kErrorOk;
     }
 
-    // savedRegisters = arguments; outgoingStackArgs = incomingStackArgs;
-    void SaveArguments(size_t stackArguments)
+    void SaveArguments()
     {
         Emit(a.push(rbp));
         Emit(a.mov(rbp, rsp));
@@ -111,29 +109,14 @@ private:
         Emit(a.push(rcx));
         Emit(a.push(r8));
         Emit(a.push(r9));
-        const auto stackBytes = static_cast<int32_t>((stackArguments * 8 + 15) & ~size_t{15});
-        if (stackBytes != 0) {
-            Emit(a.sub(rsp, stackBytes));
-            Emit(a.lea(r11, qword_ptr(rbp, 16)));
-            Emit(a.mov(rax, rsp));
-            Emit(a.mov(r10, static_cast<uint64_t>(stackArguments)));
-            Label copy = a.newLabel();
-            Emit(a.bind(copy));
-            Emit(a.mov(rdx, qword_ptr(r11)));
-            Emit(a.mov(qword_ptr(rax), rdx));
-            Emit(a.add(r11, 8));
-            Emit(a.add(rax, 8));
-            Emit(a.dec(r10));
-            Emit(a.jnz(copy));
-        }
     }
 
-    // target = Resolve(&context, &record); result = target(savedArguments...);
-    void ResolveAndCall(GlobalContext& context, FunctionRecord& record)
+    void ResolveAndJump(GlobalContext& context, FunctionRecord& record)
     {
         Emit(a.mov(rdi, reinterpret_cast<uintptr_t>(&context)));
         Emit(a.mov(rsi, reinterpret_cast<uintptr_t>(&record)));
-        Emit(a.mov(rax, reinterpret_cast<uintptr_t>(&Resolve)));
+        Emit(a.mov(rdx, qword_ptr(rbp, 8)));
+        Emit(a.mov(rax, reinterpret_cast<uintptr_t>(&ResolveAndPatch)));
         Emit(a.call(rax));
         Emit(a.mov(r11, rax));
         Emit(a.mov(rdi, qword_ptr(rbp, -8)));
@@ -142,30 +125,16 @@ private:
         Emit(a.mov(rcx, qword_ptr(rbp, -32)));
         Emit(a.mov(r8, qword_ptr(rbp, -40)));
         Emit(a.mov(r9, qword_ptr(rbp, -48)));
-        Emit(a.call(r11));
-    }
-
-    // savedResult = result; Publish(&context, &record); return savedResult;
-    void PublishAndReturn(GlobalContext& context, FunctionRecord& record)
-    {
-        Emit(a.push(rax));
-        Emit(a.sub(rsp, 8));
-        Emit(a.mov(rdi, reinterpret_cast<uintptr_t>(&context)));
-        Emit(a.mov(rsi, reinterpret_cast<uintptr_t>(&record)));
-        Emit(a.mov(rax, reinterpret_cast<uintptr_t>(&Publish)));
-        Emit(a.call(rax));
-        Emit(a.add(rsp, 8));
-        Emit(a.pop(rax));
         Emit(a.mov(rsp, rbp));
         Emit(a.pop(rbp));
-        Emit(a.ret());
+        Emit(a.jmp(r11));
     }
 
     Assembler& a;
     bool ok = true;
 };
 
-void* MakeResolverStub(GlobalContext& context, FunctionRecord& record, size_t stackArguments)
+void* MakeResolverStub(GlobalContext& context, FunctionRecord& record)
 {
     auto& runtime = context.GetRuntime();
     CodeHolder code;
@@ -173,7 +142,7 @@ void* MakeResolverStub(GlobalContext& context, FunctionRecord& record, size_t st
         return nullptr;
     }
     Assembler assembler(&code);
-    const bool ok = ResolverStubEmitter(assembler).Emit(context, record, stackArguments);
+    const bool ok = ResolverStubEmitter(assembler).Emit(context, record);
     void* stub = nullptr;
     if (!ok || runtime.add(&stub, &code) != kErrorOk) {
         return nullptr;
@@ -198,7 +167,7 @@ CodeAddress CompileFunctionStub::Compile(GlobalContext& context, const CHIR::Fun
         return record.GetEntryStub();
     }
 
-    void* resolverStub = MakeResolverStub(context, record, stackArguments);
+    void* resolverStub = MakeResolverStub(context, record);
     if (!resolverStub) {
         return 0;
     }
