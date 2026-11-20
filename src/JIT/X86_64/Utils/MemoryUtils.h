@@ -13,6 +13,7 @@
 #include <cstdint>
 
 namespace Cangjie::CHIR {
+class Type;
 class Value;
 }
 
@@ -32,6 +33,8 @@ public:
     static void ReserveStack(FunctionContext& context, uint32_t size);
     static void ReleaseStack(FunctionContext& context, uint32_t size);
     static bool StoreOutgoingArgument(FunctionContext& context, const CHIR::Value* value, size_t index,
+        uint32_t stackSize);
+    static bool PlaceTypeInfo(FunctionContext& context, const CHIR::Type* type, const Location& location,
         uint32_t stackSize);
     static bool ZeroStackValueAndLoadAddress(
         FunctionContext& context, const CHIR::Value* value, const asmjit::x86::Gp& target);

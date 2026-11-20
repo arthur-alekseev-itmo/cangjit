@@ -70,6 +70,10 @@ void CompileAllocation(FunctionContext& context, const CHIR::AllocateBase& expre
         context.Fail(JitFailureKind::UnsupportedAllocation, expression.GetExprKind());
         return;
     }
+    if (!context.GetGlobalContext().GetRuntimeBindings().EnsureStandardPackage(def->GetPackageName()).empty()) {
+        context.Fail(JitFailureKind::UnresolvedSymbol, expression.GetExprKind());
+        return;
+    }
     const bool local = type->IsLocalRegion();
     if (local && def->GetFinalizer()) {
         // A local finalizer must be removed on every dead-out frontier,
@@ -96,7 +100,7 @@ void CompileAllocation(FunctionContext& context, const CHIR::AllocateBase& expre
     // Runtime expects the eight-byte header plus the payload rounded to eight bytes.
     const uint64_t payload = reinterpret_cast<GetSize>(sizeAddress)(typeInfo);
     const bool pinned = allocationSymbol == "CJ_MCC_NewPinnedObject";
-    const uint64_t size = pinned ? 168 : ((payload + 7) & ~uint64_t{7}) + 8;
+    const uint64_t size = ((payload + 7) & ~uint64_t{7}) + 8;
     if (size > std::numeric_limits<uint32_t>::max()) {
         context.Fail(JitFailureKind::UnsupportedAllocation, expression.GetExprKind());
         return;

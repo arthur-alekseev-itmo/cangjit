@@ -76,24 +76,12 @@ void CompileNumericCast::Compile(FunctionContext& context, const CHIR::NumericCa
         assembler.jmp(done);
         assembler.bind(clampLower);
         if (overflow == OverflowStrategy::THROWING) {
-            const char* typeName = nullptr;
-            switch (targetType->GetTypeKind()) {
-                case CHIR::Type::TYPE_INT8: typeName = "Int8"; break;
-                case CHIR::Type::TYPE_INT16: typeName = "Int16"; break;
-                case CHIR::Type::TYPE_INT32: typeName = "Int32"; break;
-                case CHIR::Type::TYPE_INT64: typeName = "Int64"; break;
-                case CHIR::Type::TYPE_INT_NATIVE: typeName = "IntNative"; break;
-                case CHIR::Type::TYPE_UINT8: typeName = "UInt8"; break;
-                case CHIR::Type::TYPE_UINT16: typeName = "UInt16"; break;
-                case CHIR::Type::TYPE_UINT32: typeName = "UInt32"; break;
-                case CHIR::Type::TYPE_UINT64: typeName = "UInt64"; break;
-                case CHIR::Type::TYPE_UINT_NATIVE: typeName = "UIntNative"; break;
-                default: context.Fail(JitFailureKind::UnsupportedNumericCast); return;
-            }
-            const std::string prefix = std::string("CJ_JIT_Throw_Cast") + typeName;
-            EmitArithmeticException(context, expression, unwind, (prefix + "Min").c_str());
+            const auto name = targetType->ToString();
+            EmitArithmeticException(context, expression, unwind,
+                ("The result would be less than " + name + ".Min.").c_str());
             assembler.bind(clampUpper);
-            EmitArithmeticException(context, expression, unwind, (prefix + "Max").c_str());
+            EmitArithmeticException(context, expression, unwind,
+                ("The result would be greater than " + name + ".Max.").c_str());
         } else {
             assembler.mov(asmjit::x86::rax, lower);
             assembler.jmp(done);

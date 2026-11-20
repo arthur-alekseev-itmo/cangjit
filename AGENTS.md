@@ -1,0 +1,1 @@
+../cangjit-knowledge-base/AGENTS.md

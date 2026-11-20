@@ -7,7 +7,6 @@
 #ifndef CANGJIE_JIT_X86_64_JIT_RUNTIME_BINDINGS_H
 #define CANGJIE_JIT_X86_64_JIT_RUNTIME_BINDINGS_H
 
-#include <functional>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -19,12 +18,11 @@ struct RuntimeParam;
 
 namespace Cangjie::JIT::X86_64 {
 // Runtime path, native library paths, runtime parameters, owner mode,
-// stack-growth mode, sidecar path, and callback to bind sidecar entry slots.
+// stack-growth mode.
 // The host guarantees runtime ownership, stack-growth mode, and that loaded
 // libraries are not owned by another client.
 using BindingResult = std::string; // empty on success, otherwise a diagnostic
-using RuntimeConfig = std::tuple<std::string, std::vector<std::string>, const ::RuntimeParam*, bool, bool,
-    std::string, std::function<BindingResult()>>;
+using RuntimeConfig = std::tuple<std::string, std::vector<std::string>, const ::RuntimeParam*, bool, bool>;
 using SymbolName = std::string_view;
 using SymbolResult = std::variant<void*, std::string>;
 
@@ -35,6 +33,7 @@ public:
     JitRuntimeBindings& operator=(const JitRuntimeBindings&) = delete;
 
     BindingResult Initialize(const RuntimeConfig& config);
+    BindingResult EnsureStandardPackage(std::string_view package);
     SymbolResult Resolve(SymbolName name);
     // The host must first quiesce generated code and release all objects and
     // tasks referencing the loaded libraries. Calls are externally serialized.
@@ -42,6 +41,7 @@ public:
 
 private:
     void* runtime = nullptr;
+    std::string runtimeDirectory;
     std::vector<std::string> libraries;
     std::unordered_map<std::string, void*> symbols;
     bool ownsRuntime = false;

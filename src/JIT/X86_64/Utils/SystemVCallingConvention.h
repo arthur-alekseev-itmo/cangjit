@@ -12,6 +12,7 @@
 #include "../Types.h"
 
 namespace Cangjie::CHIR {
+class DynamicDispatch;
 class Function;
 }
 
@@ -19,13 +20,13 @@ namespace Cangjie::JIT::X86_64 {
 class SystemVCallingConvention final {
 public:
     SystemVCallingConvention() = delete;
-    // The existing JIT entry/call lowering rejects supplementary operands.
-    static std::optional<ParameterPlacement> GetParameterPlacement(
-        const CHIR::Function& function);
     // Native function entry ABI, including supplementary operands; not the
-    // separate with-TypeInfo-wrapper ABI. Override signatures are unsupported.
+    // separate with-TypeInfo-wrapper ABI. Override types must have the same
+    // representation as the body signature.
     static std::optional<ParameterPlacement> GetNativeParameterPlacement(
         const CHIR::Function& function);
+    static std::optional<ParameterPlacement> GetVirtualParameterPlacement(
+        const CHIR::DynamicDispatch& expression, bool isStatic);
 };
 } // namespace Cangjie::JIT::X86_64
 

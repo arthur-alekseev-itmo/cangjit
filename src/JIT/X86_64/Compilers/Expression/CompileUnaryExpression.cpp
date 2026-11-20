@@ -60,7 +60,7 @@ void CompileUnaryExpression::Compile(FunctionContext& ctx, const CHIR::UnaryExpr
                     a.test(asmjit::x86::rax, asmjit::x86::rax);
                     a.jz(ordinary);
                 }
-                EmitArithmeticException(ctx, expr, unwind, "CJ_JIT_Throw_Sub");
+                EmitArithmeticException(ctx, expr, unwind, "sub");
                 a.bind(ordinary);
                 a.neg(asmjit::x86::rax);
             } else if (expr.GetOverflowStrategy() == OverflowStrategy::SATURATING) {

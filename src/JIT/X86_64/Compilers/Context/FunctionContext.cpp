@@ -7,15 +7,19 @@
 #include "FunctionContext.h"
 
 #include "GlobalContext.h"
+#include "../../Utils/MemoryUtils.h"
 #include "../../RegisterAllocation/SafepointLiveness.h"
 #include "../../Utils/StackFrameUtils.h"
 
+#include <algorithm>
 #include <cassert>
+#include <functional>
 #include <limits>
 #include <ostream>
 #include <utility>
 
 #include "cangjie/CHIR/IR/Expression/Expression.h"
+#include "cangjie/CHIR/IR/Type/ClassDef.h"
 #include "cangjie/Mangle/CHIRTypeManglingUtils.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
 
@@ -32,6 +36,19 @@ FunctionContext::FunctionContext(GlobalContext& globalContext, const CHIR::Funct
       registerAllocation(std::move(registerAllocation))
 {
     assert(function != nullptr);
+    const auto genericCount = function->GetGenericTypeParams().size();
+    if (genericCount > std::numeric_limits<size_t>::max() - 2) {
+        Fail(JitFailureKind::StackFrameTooLarge);
+        return;
+    }
+    hiddenTypeInfoCount = genericCount + (function->GetParentCustomTypeDef() ? 1U : 0U) +
+        (function->TestAttr(CHIR::Attribute::STATIC) ? 1U : 0U);
+    const auto hiddenBase = this->registerAllocation.ReserveStackSlots(hiddenTypeInfoCount);
+    if (!hiddenBase) {
+        Fail(JitFailureKind::StackFrameTooLarge);
+        return;
+    }
+    hiddenTypeInfoBase = *hiddenBase;
     error = code.init(globalContext.GetRuntime().environment());
     if (error == asmjit::kErrorOk) {
         code.setErrorHandler(&emitterErrorHandler);
@@ -63,7 +80,85 @@ JitMetadataBuilder& FunctionContext::GetMetadataBuilder() noexcept
 {
     return metadataBuilder;
 }
-bool FunctionContext::RecordSafepoint(const CHIR::Expression& expression)
+
+std::optional<int32_t> FunctionContext::GetHiddenTypeInfoOffset(size_t index) const noexcept
+{
+    if (index >= hiddenTypeInfoCount) {
+        return std::nullopt;
+    }
+    return StackFrameUtils::GetSlotOffset(hiddenTypeInfoBase + index, registerAllocation.GetStackSlotCount());
+}
+
+bool FunctionContext::LoadTypeInfo(const CHIR::Type& input, const asmjit::x86::Gp& target)
+{
+    const CHIR::Type* type = &input;
+    while (type->IsRef()) {
+        type = static_cast<const CHIR::RefType*>(type)->GetBaseType();
+        if (!type) {
+            Fail(JitFailureKind::UnsupportedCall);
+            return false;
+        }
+    }
+    if (type->IsGeneric()) {
+        const auto& generics = function->GetGenericTypeParams();
+        for (size_t i = 0; i < generics.size(); ++i) {
+            if (generics[i] == type) {
+                const auto offset = GetHiddenTypeInfoOffset(i);
+                if (!offset) {
+                    break;
+                }
+                assembler.mov(target, asmjit::x86::qword_ptr(asmjit::x86::rbp, *offset));
+                return true;
+            }
+        }
+        Fail(JitFailureKind::UnsupportedCall);
+        return false;
+    }
+    if (type->IsThis()) {
+        if (function->TestAttr(CHIR::Attribute::STATIC)) {
+            const auto index = function->GetGenericTypeParams().size() +
+                (function->GetParentCustomTypeDef() ? 1U : 0U);
+            const auto offset = GetHiddenTypeInfoOffset(index);
+            if (!offset) {
+                Fail(JitFailureKind::UnsupportedCall);
+                return false;
+            }
+            assembler.mov(target, asmjit::x86::qword_ptr(asmjit::x86::rbp, *offset));
+            return true;
+        }
+        const auto& parameters = function->GetParams();
+        if (parameters.empty() || !MemoryUtils::LoadValue(*this, parameters.front(), target)) {
+            Fail(JitFailureKind::UnsupportedCall);
+            return false;
+        }
+        assembler.mov(target, asmjit::x86::qword_ptr(target));
+        assembler.shl(target, 16);
+        assembler.shr(target, 16);
+        return true;
+    }
+    if (type->IsClass() || type->IsStruct() || type->IsEnum()) {
+        const auto* def = static_cast<const CHIR::CustomType*>(type)->GetCustomTypeDef();
+        if (!def || !globalContext.GetRuntimeBindings().EnsureStandardPackage(def->GetPackageName()).empty()) {
+            Fail(JitFailureKind::UnresolvedSymbol);
+            return false;
+        }
+    }
+    auto symbol = globalContext.GetRuntimeBindings().Resolve("CJ_MCC_GetTypeByMangledName");
+    const auto* lookup = std::get_if<void*>(&symbol);
+    if (!lookup || !*lookup) {
+        Fail(JitFailureKind::UnresolvedSymbol);
+        return false;
+    }
+    const auto name = CHIR::GetTypeQualifiedName(*type, true);
+    auto* info = reinterpret_cast<void* (*)(const char*)>(*lookup)(name.c_str());
+    if (!info) {
+        Fail(JitFailureKind::UnresolvedSymbol);
+        return false;
+    }
+    assembler.long_().mov(target, asmjit::imm(reinterpret_cast<uintptr_t>(info)));
+    return true;
+}
+bool FunctionContext::RecordSafepoint(const CHIR::Expression& expression, const CHIR::Value* temporaryRoot)
 {
     const auto offset = assembler.offset();
     if (offset < 4 || offset - 4 > std::numeric_limits<uint32_t>::max()) {
@@ -77,6 +172,29 @@ bool FunctionContext::RecordSafepoint(const CHIR::Expression& expression)
         return false;
     }
     auto& [gc, stack, derived] = *roots;
+    if (temporaryRoot) {
+        const auto id = valueNumeration.GetId(temporaryRoot);
+        const auto* slot = id && *id < registerAllocation.GetLocationCount()
+            ? registerAllocation.GetLocation(*id).AsStack() : nullptr;
+        const auto rootOffset = slot
+            ? StackFrameUtils::GetSlotOffset(slot->index, registerAllocation.GetStackSlotCount()) : std::nullopt;
+        if (!slot || !rootOffset || gc.first != 0) {
+            Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
+            return false;
+        }
+        for (ValueNumeration::Id i = 0; i < registerAllocation.GetLocationCount(); ++i) {
+            const auto* other = registerAllocation.GetLocation(i).AsStack();
+            if ((i != *id && other && other->index == slot->index) ||
+                registerAllocation.GetAllocationSlot(i) == slot->index) {
+                Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
+                return false;
+            }
+        }
+        auto position = std::lower_bound(gc.second.begin(), gc.second.end(), *rootOffset, std::greater<int32_t>());
+        const auto index = position - gc.second.begin();
+        gc.second.insert(position, *rootOffset);
+        derived.insert(derived.begin() + index, JitMetadataBuilder::Roots{});
+    }
     if (!globalContext.IsStackGrowthEnabled()) {
         stack = {};
     }
@@ -110,6 +228,11 @@ bool FunctionContext::EmitExceptionLanding(const CHIR::Block& block, size_t call
         for (const auto* type : exceptions) {
             if (!type) {
                 Fail(JitFailureKind::UnsupportedExpression);
+                return false;
+            }
+            const auto* def = type->GetClassDef();
+            if (!def || !globalContext.GetRuntimeBindings().EnsureStandardPackage(def->GetPackageName()).empty()) {
+                Fail(JitFailureKind::UnresolvedSymbol);
                 return false;
             }
             const auto name = CHIR::GetTypeQualifiedName(*type, true);

@@ -7,9 +7,7 @@
 #include "X86_64Compiler.h"
 
 #include "Compilers/Function/CompileFunction.h"
-#include "Compilers/Function/CompileFunctionStub.h"
 #include "Compilers/Context/GlobalContext.h"
-#include "cangjie/JIT/JitSymbols.h"
 #include <Cangjie.h>
 #include <cassert>
 #include <cstdlib>
@@ -27,17 +25,9 @@ namespace Cangjie::JIT::X86_64 {
 X86_64Compiler::X86_64Compiler() : globalContext(std::make_unique<GlobalContext>()) {}
 
 X86_64Compiler::~X86_64Compiler() = default;
-void X86_64Compiler::SetSidecar(std::string path, std::vector<const CHIR::Function*> functions)
-{
-    assert(!runtimeConfigured);
-    sidecarPath = std::move(path);
-    sidecarFunctions = std::move(functions);
-}
-
-
-
 void X86_64Compiler::Compile(const CHIR::Package& package, std::ostream& output) const
 {
+    globalContext->SetPackage(package);
     for (const auto* function : package.GetGlobalFuncsWithBody()) {
         if (function->GetIdentifierWithoutPrefix() != USER_MAIN_MANGLED_NAME) {
             continue;
@@ -75,35 +65,9 @@ void X86_64Compiler::Compile(const CHIR::Package& package, std::ostream& output)
                 return;
             }
             const std::string libDir = std::string(home) + "/runtime/lib/linux_x86_64_cjnative/";
-            if (sidecarPath.empty()) {
-                std::cerr << "JIT: package metadata sidecar is required\n";
-                output.setstate(std::ios::badbit);
-                return;
-            }
             const RuntimeParam params{};
-            const auto bindSidecar = [this]() -> BindingResult {
-                auto& bindings = globalContext->GetRuntimeBindings();
-                for (const auto* sidecarFunction : sidecarFunctions) {
-                    if (!sidecarFunction) {
-                        return "JIT sidecar contains an invalid function";
-                    }
-                    const auto identifier = sidecarFunction->GetIdentifierWithoutPrefix();
-                    auto symbol = bindings.Resolve(JitFunctionSlotName(identifier));
-                    const auto* slot = std::get_if<void*>(&symbol);
-                    if (!slot || !*slot) {
-                        return "JIT sidecar function slot not found: " + identifier;
-                    }
-                    const auto entry = CompileFunctionStub::Compile(*globalContext, sidecarFunction);
-                    if (!entry) {
-                        return "cannot create a JIT entry stub for " + identifier;
-                    }
-                    *static_cast<void**>(*slot) = reinterpret_cast<void*>(entry);
-                }
-                return {};
-            };
             const RuntimeConfig config{libDir + "libcangjie-runtime.so",
-                {libDir + "libcangjie-std-core.so"}, &params, true, std::strcmp(stackGrowth, "1") == 0,
-                sidecarPath, bindSidecar};
+                {libDir + "libcangjie-std-core.so"}, &params, true, std::strcmp(stackGrowth, "1") == 0};
             const auto error = globalContext->ConfigureRuntime(config);
             if (!error.empty()) {
                 std::cerr << "JIT runtime initialization failed: " << error << '\n';

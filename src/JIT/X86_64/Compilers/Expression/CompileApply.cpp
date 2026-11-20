@@ -17,6 +17,7 @@
 #include "cangjie/CHIR/IR/Type/Type.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
 
+
 namespace Cangjie::JIT::X86_64 {
 namespace {
 namespace x86 = asmjit::x86;
@@ -38,8 +39,12 @@ const CHIR::Function* ValidateCall(FunctionContext& context, const CHIR::ApplyBa
         return nullptr;
     }
     const bool noResult = returnType->IsUnit() || returnType->IsNothing() || returnType->IsVoid();
-    if (!noResult && returnType->GetTypeKind() != CHIR::Type::TYPE_INT64 &&
-        returnType->GetTypeKind() != CHIR::Type::TYPE_UINT64) {
+    const auto* returnBase = returnType->IsRef()
+        ? static_cast<const CHIR::RefType*>(returnType)->GetBaseType() : nullptr;
+    const bool objectReturn = returnBase &&
+        (returnBase->IsClass() || returnBase->IsRawArray() || returnBase->IsBox());
+    if (!noResult && !RegisterUtils::IntegerWidth(*returnType) && !returnType->IsBoolean() &&
+        !objectReturn && !returnType->IsCPointer() && !returnType->IsCString()) {
         context.Fail(JitFailureKind::UnsupportedReturnType);
         return nullptr;
     }
@@ -56,7 +61,8 @@ bool ValidateArguments(FunctionContext& context, const CHIR::ApplyBase& expressi
     for (size_t i = 0; i < parameters.size(); ++i) {
         const auto* parameter = parameters[i];
         const auto* argument = expression.GetOperand(i + 1);
-        if (!RegisterUtils::IntegerWidth(*parameter->GetType()) ||
+        if ((!RegisterUtils::IntegerWidth(*parameter->GetType()) && !parameter->GetType()->IsBoolean() &&
+            !parameter->GetType()->IsRef()) ||
             !argument || !argument->GetType() ||
             argument->GetType()->GetTypeKind() != parameter->GetType()->GetTypeKind()) {
             context.Fail(JitFailureKind::UnsupportedCall);
@@ -69,6 +75,19 @@ bool ValidateArguments(FunctionContext& context, const CHIR::ApplyBase& expressi
 CodeAddress ResolveAddress(FunctionContext& context, const CHIR::Function& callee)
 {
     auto& global = context.GetGlobalContext();
+    if (callee.IsImportedFunc()) {
+        if (!global.GetRuntimeBindings().EnsureStandardPackage(callee.GetPackageName()).empty()) {
+            context.Fail(JitFailureKind::UnresolvedSymbol);
+            return 0;
+        }
+        auto symbol = global.GetRuntimeBindings().Resolve(callee.GetIdentifierWithoutPrefix());
+        const auto* address = std::get_if<void*>(&symbol);
+        if (!address || !*address) {
+            context.Fail(JitFailureKind::UnresolvedSymbol);
+            return 0;
+        }
+        return reinterpret_cast<CodeAddress>(*address);
+    }
     auto& record = global.GetFunctionRegistry().GetOrCreate(callee);
     if (record.GetState() == FunctionState::FAILED) {
         context.Fail(JitFailureKind::UnsupportedCall);
@@ -81,6 +100,7 @@ CodeAddress ResolveAddress(FunctionContext& context, const CHIR::Function& calle
     }
     return target;
 }
+
 
 bool PlaceArguments(FunctionContext& context, const CHIR::ApplyBase& expression, const CHIR::Function& callee,
     const ParameterPlacement& placement)
@@ -111,6 +131,26 @@ bool PlaceArguments(FunctionContext& context, const CHIR::ApplyBase& expression,
             return false;
         }
     }
+    const auto& typeArgs = expression.GetInstantiatedTypeArgs();
+    if (typeArgs.size() != placement.genericTypeInfoLocations.size()) {
+        context.Fail(JitFailureKind::UnsupportedCallingConvention);
+        return false;
+    }
+    for (size_t i = 0; i < typeArgs.size(); ++i) {
+        if (!MemoryUtils::PlaceTypeInfo(context, typeArgs[i], placement.genericTypeInfoLocations[i], placement.stackSize)) {
+            return false;
+        }
+    }
+    if (placement.outerTypeInfoLocation) {
+        const auto* outer = expression.GetInstParentCustomTyOfCallee(context.GetGlobalContext().GetCHIRBuilder());
+        if (!MemoryUtils::PlaceTypeInfo(context, outer, *placement.outerTypeInfoLocation, placement.stackSize)) {
+            return false;
+        }
+    }
+    if (placement.thisTypeInfoLocation &&
+        !MemoryUtils::PlaceTypeInfo(context, expression.GetThisType(), *placement.thisTypeInfoLocation, placement.stackSize)) {
+        return false;
+    }
     const auto* returnType = callee.GetReturnType();
     if ((returnType->IsUnit() || returnType->IsNothing()) &&
         !MemoryUtils::ZeroStackValueAndLoadAddress(context, expression.GetResult(), x86::rdi)) {
@@ -131,17 +171,23 @@ void EmitCall(FunctionContext& context, const CHIR::ApplyBase& expression, const
     if (!context.RecordSafepoint(expression)) {
         return;
     }
-    auto& record = context.GetGlobalContext().GetFunctionRegistry().GetOrCreate(callee);
-    if (target == record.GetEntryStub()) {
-        if (assembler.offset() - instructionOffset != 13) {
-            context.Fail(JitFailureKind::InvalidLazyCallSite);
-            return;
+    if (!callee.IsImportedFunc()) {
+        auto& record = context.GetGlobalContext().GetFunctionRegistry().GetOrCreate(callee);
+        if (target == record.GetEntryStub()) {
+            if (assembler.offset() - instructionOffset != 13) {
+                context.Fail(JitFailureKind::InvalidLazyCallSite);
+                return;
+            }
+            context.GetLazyCallSites().push_back({instructionOffset + 2, assembler.offset(), &record});
         }
-        context.GetLazyCallSites().push_back({instructionOffset + 2, assembler.offset(), &record});
     }
     MemoryUtils::ReleaseStack(context, stackSize);
     const auto* returnType = callee.GetReturnType();
     if (!returnType->IsUnit() && !returnType->IsNothing() && !returnType->IsVoid()) {
+        const auto width = returnType->IsBoolean() ? 8U : RegisterUtils::IntegerWidth(*returnType);
+        if (width) {
+            RegisterUtils::NormalizeInteger(assembler, x86::rax, width, returnType->IsSignedInteger());
+        }
         MemoryUtils::StoreValue(context, expression.GetResult(), x86::rax);
     }
     if (normal && unwind && !context.GetFailure()) {
@@ -157,8 +203,10 @@ void CompileCall(FunctionContext& context, const CHIR::ApplyBase& expression,
     if (!callee) {
         return;
     }
-    const auto placements = SystemVCallingConvention::GetParameterPlacement(*callee);
-    if (!placements) {
+    const auto placements = SystemVCallingConvention::GetNativeParameterPlacement(*callee);
+    if (!placements || !placements->basePointerLocations.empty() ||
+        (placements->indirectReturn && !placements->abiReturnType->IsUnit() &&
+            !placements->abiReturnType->IsNothing())) {
         context.Fail(JitFailureKind::UnsupportedCallingConvention);
         return;
     }

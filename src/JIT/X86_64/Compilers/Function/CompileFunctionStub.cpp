@@ -71,23 +71,34 @@ bool IsObjectReference(const CHIR::Type& type)
     return base && (base->IsClass() || base->IsRawArray() || base->IsBox());
 }
 
-bool SupportedSignature(const CHIR::Function& function, std::vector<int32_t>& gcSlots)
+bool SupportedSignature(const CHIR::Function& function, std::vector<int32_t>& gcSlots,
+    std::vector<int32_t>& stackSlots)
 {
-    if (function.IsCFunc() || function.Get<CHIR::OverrideSrcFuncType>()) {
+    if (function.IsCFunc()) {
         return false;
     }
     const auto placement = SystemVCallingConvention::GetNativeParameterPlacement(function);
-    if (!placement || placement->indirectReturn || !placement->basePointerLocations.empty()) {
+    if (!placement || !placement->basePointerLocations.empty() ||
+        (placement->indirectReturn && !placement->abiReturnType->IsUnit() &&
+            !placement->abiReturnType->IsNothing())) {
         return false;
     }
     const auto supported = [](const CHIR::Type& type) {
         const auto kind = type.GetTypeKind();
-        return type.IsInteger() || kind == CHIR::Type::TYPE_FLOAT32 || kind == CHIR::Type::TYPE_FLOAT64 ||
+        return type.IsInteger() || type.IsBoolean() || kind == CHIR::Type::TYPE_FLOAT32 ||
+            kind == CHIR::Type::TYPE_FLOAT64 ||
             IsObjectReference(type);
     };
     const auto* result = placement->abiReturnType;
-    if (!result || (!result->IsVoid() && !supported(*result))) {
+    if (!result || (!result->IsVoid() && !result->IsUnit() && !result->IsNothing() && !supported(*result))) {
         return false;
+    }
+    if (placement->indirectReturn) {
+        const auto* reg = placement->sretLocation ? placement->sretLocation->AsRegister() : nullptr;
+        if (!reg || reg->type != RegisterType::RDI || reg->index != 0) {
+            return false;
+        }
+        stackSlots.push_back(-16);
     }
     for (const auto* parameter : function.GetParams()) {
         const auto type = placement->abiParameterTypes.find(parameter);
@@ -195,7 +206,8 @@ private:
     bool ok = true;
 };
 
-void* MakeResolverStub(GlobalContext& context, FunctionRecord& record, std::vector<int32_t> gcSlots)
+void* MakeResolverStub(GlobalContext& context, FunctionRecord& record, std::vector<int32_t> gcSlots,
+    std::vector<int32_t> stackSlots)
 {
     auto symbol = context.GetRuntimeBindings().Resolve("CJ_MCC_C2NStub");
     const auto* c2nStub = std::get_if<void*>(&symbol);
@@ -217,7 +229,10 @@ void* MakeResolverStub(GlobalContext& context, FunctionRecord& record, std::vect
     const auto codeSize = static_cast<uint32_t>(assembler.offset() - 4);
     JitMetadataBuilder metadata(context.IsStackGrowthEnabled());
     metadata.RecordFrame(192, {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX});
-    metadata.RecordSafepoint(safepoint, 0, std::move(gcSlots), 0, {}, 0, {});
+    if (!context.IsStackGrowthEnabled()) {
+        stackSlots.clear();
+    }
+    metadata.RecordSafepoint(safepoint, 0, std::move(gcSlots), 0, std::move(stackSlots), 0, {});
     auto provisional = metadata.Build(0x20000000, 0x10000000, codeSize);
     const auto* layout = std::get_if<std::pair<std::vector<uint8_t>, std::array<uint8_t, 4>>>(&provisional);
     if (!layout || assembler.align(AlignMode::kData, 4) != kErrorOk) {
@@ -255,7 +270,8 @@ CodeAddress CompileFunctionStub::Compile(GlobalContext& context, const CHIR::Fun
     return 0;
 #else
     std::vector<int32_t> gcSlots;
-    if (!function || !SupportedSignature(*function, gcSlots)) {
+    std::vector<int32_t> stackSlots;
+    if (!function || !SupportedSignature(*function, gcSlots, stackSlots)) {
         return 0;
     }
     auto& record = context.GetFunctionRegistry().GetOrCreate(*function);
@@ -263,7 +279,7 @@ CodeAddress CompileFunctionStub::Compile(GlobalContext& context, const CHIR::Fun
         return record.GetEntryStub();
     }
 
-    void* allocation = MakeResolverStub(context, record, std::move(gcSlots));
+    void* allocation = MakeResolverStub(context, record, std::move(gcSlots), std::move(stackSlots));
     if (!allocation) {
         return 0;
     }

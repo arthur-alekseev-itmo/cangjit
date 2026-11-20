@@ -22,7 +22,7 @@ public:
 
 // Emits a real runtime exception and records all call sites that can unwind.
 void EmitArithmeticException(FunctionContext& ctx, const CHIR::Expression& expr,
-    const CHIR::Block* unwind, const char* symbol);
+    const CHIR::Block* unwind, const char* message, bool overflow = true);
 } // namespace Cangjie::JIT::X86_64
 
 #endif

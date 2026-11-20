@@ -24,6 +24,8 @@ namespace Cangjie::CHIR {
 class Expression;
 class Block;
 class Function;
+class Type;
+class Value;
 }
 
 namespace Cangjie::JIT::X86_64 {
@@ -38,7 +40,9 @@ public:
     asmjit::CodeHolder& GetCode() noexcept;
     asmjit::x86::Assembler& GetAssembler() noexcept;
     JitMetadataBuilder& GetMetadataBuilder() noexcept;
-    bool RecordSafepoint(const CHIR::Expression& expression);
+    std::optional<int32_t> GetHiddenTypeInfoOffset(size_t index) const noexcept;
+    bool LoadTypeInfo(const CHIR::Type& type, const asmjit::x86::Gp& target);
+    bool RecordSafepoint(const CHIR::Expression& expression, const CHIR::Value* temporaryRoot = nullptr);
     bool EmitExceptionLanding(const CHIR::Block& block, size_t callStart, size_t callEnd);
     asmjit::Error GetError() const noexcept;
     asmjit::Label GetBlockLabel(const CHIR::Block* block);
@@ -82,6 +86,8 @@ private:
     ValueNumeration valueNumeration;
     InterferenceGraph interferenceGraph;
     RegisterAllocation registerAllocation;
+    size_t hiddenTypeInfoBase = 0;
+    size_t hiddenTypeInfoCount = 0;
 };
 
 } // namespace Cangjie::JIT::X86_64

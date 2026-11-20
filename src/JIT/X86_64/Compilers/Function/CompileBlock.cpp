@@ -14,16 +14,20 @@
 #include "../Expression/CompileBranch.h"
 #include "../Expression/CompileExit.h"
 #include "../Expression/CompileGoTo.h"
+#include "../Expression/CompileInvoke.h"
 #include "../Expression/CompileUnaryExpression.h"
 #include "../Expression/CompileNumericCast.h"
+#include "../Expression/CompileObject.h"
 #include "../Context/FunctionContext.h"
 #include "../../Utils/MemoryUtils.h"
 #include "../../Utils/RegisterUtils.h"
 #include "../../Utils/StackFrameUtils.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Expression/Terminator.h"
+#include "cangjie/CHIR/IR/Type/ClassDef.h"
 #include "cangjie/CHIR/IR/Type/Type.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
+#include "cangjie/Mangle/CHIRTypeManglingUtils.h"
 
 namespace Cangjie::JIT::X86_64 {
 namespace {
@@ -34,7 +38,8 @@ unsigned ScalarWidth(const CHIR::Type* type)
 
 bool MatchesReference(const CHIR::Value* reference, const CHIR::Type* type)
 {
-    if (!reference || !reference->GetType() || !reference->GetType()->IsRef() || !ScalarWidth(type)) {
+    if (!reference || !reference->GetType() || !reference->GetType()->IsRef() || !type ||
+        (!ScalarWidth(type) && !type->IsUnit())) {
         return false;
     }
     const auto* base = static_cast<const CHIR::RefType*>(reference->GetType())->GetBaseType();
@@ -69,6 +74,11 @@ void CompileLoad(FunctionContext& context, const CHIR::Load& expression)
         context.Fail(JitFailureKind::UnsupportedMemoryAccess);
         return;
     }
+    if (type->IsUnit()) {
+        context.GetAssembler().xor_(asmjit::x86::eax, asmjit::x86::eax);
+        MemoryUtils::StoreValue(context, result, asmjit::x86::rax);
+        return;
+    }
     if (!MemoryUtils::LoadValue(context, location, asmjit::x86::rcx)) {
         return;
     }
@@ -94,6 +104,9 @@ void CompileStore(FunctionContext& context, const CHIR::Store& expression)
         context.Fail(JitFailureKind::UnsupportedMemoryAccess);
         return;
     }
+    if (type->IsUnit()) {
+        return;
+    }
     if (!MemoryUtils::LoadValue(context, value, asmjit::x86::rax) ||
         !MemoryUtils::LoadValue(context, location, asmjit::x86::rcx)) {
         return;
@@ -116,6 +129,85 @@ void* ResolveExceptionSymbol(FunctionContext& context, const char* name)
         return nullptr;
     }
     return *address;
+}
+
+void CompileRTTI(FunctionContext& context, const CHIR::GetRTTI& expression)
+{
+    if (!MemoryUtils::LoadValue(context, expression.GetOperand(), asmjit::x86::rax)) {
+        return;
+    }
+    auto& a = context.GetAssembler();
+    a.mov(asmjit::x86::rax, asmjit::x86::qword_ptr(asmjit::x86::rax));
+    a.shl(asmjit::x86::rax, 16);
+    a.shr(asmjit::x86::rax, 16);
+    MemoryUtils::StoreValue(context, expression.GetResult(), asmjit::x86::rax);
+}
+
+void CompileRTTI(FunctionContext& context, const CHIR::GetRTTIStatic& expression)
+{
+    const auto* type = expression.GetRTTIType();
+    if (!type) {
+        context.Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
+        return;
+    }
+    if (!context.LoadTypeInfo(*type, asmjit::x86::rax)) {
+        return;
+    }
+    MemoryUtils::StoreValue(context, expression.GetResult(), asmjit::x86::rax);
+}
+
+void CompileInstanceOf(FunctionContext& context, const CHIR::InstanceOf& expression)
+{
+    const auto* object = expression.GetObject();
+    const auto* objectType = object ? object->GetType() : nullptr;
+    const auto* targetType = expression.GetType();
+    const auto* result = expression.GetResult();
+    if (!objectType || !objectType->IsRef() || !targetType || !targetType->IsRef() ||
+        !result || !result->GetType() || !result->GetType()->IsBoolean()) {
+        context.Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
+        return;
+    }
+    const auto* objectClass = static_cast<const CHIR::RefType*>(objectType)->GetBaseType();
+    const auto* targetClass = static_cast<const CHIR::RefType*>(targetType)->GetBaseType();
+    if (!objectClass || !objectClass->IsClass() || !targetClass || !targetClass->IsClass()) {
+        context.Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
+        return;
+    }
+    const auto* targetDef = static_cast<const CHIR::ClassType*>(targetClass)->GetClassDef();
+    if (!targetDef || !context.GetGlobalContext().GetRuntimeBindings()
+        .EnsureStandardPackage(targetDef->GetPackageName()).empty()) {
+        context.Fail(JitFailureKind::UnresolvedSymbol, expression.GetExprKind());
+        return;
+    }
+    auto* lookup = ResolveExceptionSymbol(context, "CJ_MCC_GetTypeByMangledName");
+    auto* subtype = ResolveExceptionSymbol(context, "CJ_MCC_IsSubType");
+    if (!lookup || !subtype) {
+        return;
+    }
+    const auto name = CHIR::GetTypeQualifiedName(*targetClass, true);
+    auto* typeInfo = reinterpret_cast<void* (*)(const char*)>(lookup)(name.c_str());
+    if (!typeInfo) {
+        context.Fail(JitFailureKind::UnresolvedSymbol, expression.GetExprKind());
+        return;
+    }
+    if (!MemoryUtils::LoadValue(context, object, asmjit::x86::rdi)) {
+        return;
+    }
+    auto& a = context.GetAssembler();
+    const auto done = a.newLabel();
+    a.xor_(asmjit::x86::eax, asmjit::x86::eax);
+    a.test(asmjit::x86::rdi, asmjit::x86::rdi);
+    a.jz(done);
+    a.mov(asmjit::x86::rdi, asmjit::x86::qword_ptr(asmjit::x86::rdi));
+    // The high 16 bits of an object header hold runtime state, not TypeInfo.
+    a.shl(asmjit::x86::rdi, 16);
+    a.shr(asmjit::x86::rdi, 16);
+    a.long_().mov(asmjit::x86::rsi, asmjit::imm(reinterpret_cast<uintptr_t>(typeInfo)));
+    a.long_().mov(asmjit::x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(subtype)));
+    a.call(asmjit::x86::r11);
+    a.movzx(asmjit::x86::eax, asmjit::x86::al);
+    a.bind(done);
+    MemoryUtils::StoreValue(context, result, asmjit::x86::rax);
 }
 
 void CompileGetException(FunctionContext& context, const CHIR::GetException& expression)
@@ -208,9 +300,47 @@ void CompileBlock::CompileExpression(FunctionContext& context, const CHIR::Expre
         case CHIR::ExprKind::TRY_APPLY:
             CompileApply::Compile(context, static_cast<const CHIR::TryApply&>(expression));
             break;
+        case CHIR::ExprKind::INVOKE:
+            CompileInvoke::Compile(context, static_cast<const CHIR::Invoke&>(expression));
+            break;
+        case CHIR::ExprKind::TRY_INVOKE:
+            CompileInvoke::Compile(context, static_cast<const CHIR::TryInvoke&>(expression));
+            break;
+        case CHIR::ExprKind::INVOKESTATIC:
+            CompileInvoke::Compile(context, static_cast<const CHIR::InvokeStatic&>(expression));
+            break;
+        case CHIR::ExprKind::TRY_INVOKESTATIC:
+            CompileInvoke::Compile(context, static_cast<const CHIR::TryInvokeStatic&>(expression));
+            break;
+        case CHIR::ExprKind::GET_RTTI:
+            CompileRTTI(context, static_cast<const CHIR::GetRTTI&>(expression));
+            break;
+        case CHIR::ExprKind::GET_RTTI_STATIC:
+            CompileRTTI(context, static_cast<const CHIR::GetRTTIStatic&>(expression));
+            break;
         case CHIR::ExprKind::GET_EXCEPTION:
             CompileGetException(context, static_cast<const CHIR::GetException&>(expression));
             break;
+        case CHIR::ExprKind::INSTANCEOF:
+            CompileInstanceOf(context, static_cast<const CHIR::InstanceOf&>(expression));
+            break;
+        case CHIR::ExprKind::CLASS_STATIC_CAST: {
+            const auto& cast = static_cast<const CHIR::ClassStaticCast&>(expression);
+            const auto* source = cast.GetSourceType();
+            const auto* target = cast.GetTargetType();
+            const auto* sourceBase = source && source->IsRef()
+                ? static_cast<const CHIR::RefType*>(source)->GetBaseType() : nullptr;
+            const auto* targetBase = target && target->IsRef()
+                ? static_cast<const CHIR::RefType*>(target)->GetBaseType() : nullptr;
+            if (!sourceBase || !sourceBase->IsClass() || !targetBase || !targetBase->IsClass()) {
+                context.Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
+                break;
+            }
+            if (MemoryUtils::LoadValue(context, cast.GetSourceValue(), asmjit::x86::rax)) {
+                MemoryUtils::StoreValue(context, cast.GetResult(), asmjit::x86::rax);
+            }
+            break;
+        }
         case CHIR::ExprKind::INTRINSIC:
             CompileBeginCatch(context, static_cast<const CHIR::Intrinsic&>(expression));
             break;
@@ -244,8 +374,23 @@ void CompileBlock::CompileExpression(FunctionContext& context, const CHIR::Expre
         case CHIR::ExprKind::DEBUGEXPR:
             CompileDebug::Compile(context, static_cast<const CHIR::Debug&>(expression));
             break;
-        case CHIR::ExprKind::ALLOCATE:
-            CompileAllocate(context, static_cast<const CHIR::Allocate&>(expression));
+        case CHIR::ExprKind::ALLOCATE: {
+            const auto& allocation = static_cast<const CHIR::Allocate&>(expression);
+            if (allocation.GetType() && allocation.GetType()->IsClass()) {
+                CompileObjectAllocate(context, allocation);
+            } else {
+                CompileAllocate(context, allocation);
+            }
+            break;
+        }
+        case CHIR::ExprKind::TRY_ALLOCATE:
+            CompileObjectAllocate(context, static_cast<const CHIR::TryAllocate&>(expression));
+            break;
+        case CHIR::ExprKind::START_REGION:
+            CompileLocalRegion(context, static_cast<const CHIR::StartRegion&>(expression));
+            break;
+        case CHIR::ExprKind::END_REGION:
+            CompileLocalRegion(context, static_cast<const CHIR::EndRegion&>(expression));
             break;
         case CHIR::ExprKind::LOAD:
             CompileLoad(context, static_cast<const CHIR::Load&>(expression));

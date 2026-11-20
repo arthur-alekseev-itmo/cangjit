@@ -118,6 +118,12 @@ bool MemoryUtils::LoadValue(FunctionContext& context, const CHIR::Value* value, 
         return context.GetError() == asmjit::kErrorOk;
     }
     if (value->IsGlobalVar()) {
+        if (value->IsImportedVar() &&
+            !context.GetGlobalContext().GetRuntimeBindings()
+                .EnsureStandardPackage(static_cast<const CHIR::GlobalVar*>(value)->GetPackageName()).empty()) {
+            context.Fail(JitFailureKind::UnresolvedSymbol);
+            return false;
+        }
         const auto name = value->IsImportedVar() ? value->GetIdentifierWithoutPrefix() :
             JitGlobalSlotName(value->GetIdentifierWithoutPrefix());
         auto resolved = context.GetGlobalContext().GetRuntimeBindings().Resolve(name);
@@ -262,6 +268,36 @@ bool MemoryUtils::StoreOutgoingArgument(
     context.GetAssembler().mov(
         asmjit::x86::qword_ptr(asmjit::x86::rsp, static_cast<int32_t>(index * SLOT_SIZE)), asmjit::x86::rax);
     return context.GetError() == asmjit::kErrorOk;
+}
+
+bool MemoryUtils::PlaceTypeInfo(
+    FunctionContext& context, const CHIR::Type* type, const Location& location, uint32_t stackSize)
+{
+    if (!type) {
+        context.Fail(JitFailureKind::UnsupportedCallingConvention);
+        return false;
+    }
+    if (const auto* reg = location.AsRegister()) {
+        const auto target = RegisterUtils::Get64BitRegister(reg->type);
+        if (!target) {
+            context.Fail(JitFailureKind::UnsupportedCallingConvention);
+            return false;
+        }
+        return context.LoadTypeInfo(*type, *target);
+    }
+    const auto* stack = location.AsIncomingStack();
+    if (!stack || stack->index >= stackSize / sizeof(uint64_t) ||
+        stack->index > static_cast<size_t>(std::numeric_limits<int32_t>::max()) / sizeof(uint64_t)) {
+        context.Fail(JitFailureKind::UnsupportedCallingConvention);
+        return false;
+    }
+    if (!context.LoadTypeInfo(*type, asmjit::x86::rax)) {
+        return false;
+    }
+    context.GetAssembler().mov(
+        asmjit::x86::qword_ptr(asmjit::x86::rsp, static_cast<int32_t>(stack->index * sizeof(uint64_t))),
+        asmjit::x86::rax);
+    return true;
 }
 
 bool MemoryUtils::ZeroStackValueAndLoadAddress(

@@ -14,6 +14,11 @@
 namespace Cangjie::JIT::X86_64 {
 void CompileConstant::Compile(FunctionContext& context, const CHIR::Constant& expression)
 {
+    if (expression.GetValue()->IsUnitLiteral()) {
+        context.GetAssembler().xor_(asmjit::x86::eax, asmjit::x86::eax);
+        MemoryUtils::StoreValue(context, expression.GetResult(), asmjit::x86::rax);
+        return;
+    }
     if (MemoryUtils::LoadValue(context, expression.GetValue(), asmjit::x86::rax)) {
         MemoryUtils::StoreValue(context, expression.GetResult(), asmjit::x86::rax);
     }

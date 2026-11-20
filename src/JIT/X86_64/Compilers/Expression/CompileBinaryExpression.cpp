@@ -56,9 +56,8 @@ void CheckedArithmetic(Cangjie::JIT::X86_64::FunctionContext& ctx,
     a.jmp(done);
     a.bind(overflow);
     if (expr.GetOverflowStrategy() == Cangjie::OverflowStrategy::THROWING) {
-        const char* symbol = kind == K::ADD ? "CJ_JIT_Throw_Add" :
-            kind == K::SUB ? "CJ_JIT_Throw_Sub" : "CJ_JIT_Throw_Mul";
-        Cangjie::JIT::X86_64::EmitArithmeticException(ctx, expr, unwind, symbol);
+        const char* message = kind == K::ADD ? "add" : kind == K::SUB ? "sub" : "mul";
+        Cangjie::JIT::X86_64::EmitArithmeticException(ctx, expr, unwind, message);
         a.bind(done);
         return;
     }
@@ -85,25 +84,41 @@ void CheckedArithmetic(Cangjie::JIT::X86_64::FunctionContext& ctx,
 
 namespace Cangjie::JIT::X86_64 {
 void EmitArithmeticException(FunctionContext& ctx, const CHIR::Expression& expr,
-    const CHIR::Block* unwind, const char* symbol)
+    const CHIR::Block* unwind, const char* message, bool overflow)
 {
-    auto result = ctx.GetGlobalContext().GetRuntimeBindings().Resolve(symbol);
-    auto* address = std::get_if<void*>(&result);
-    if (!address || !*address) {
+    auto& global = ctx.GetGlobalContext();
+    const auto* literal = global.GetStringLiteral(message);
+    auto factory = global.GetRuntimeBindings().Resolve(
+        overflow ? "rt$CreateOverflowException_msg" : "rt$CreateArithmeticException_msg");
+    auto thrower = global.GetRuntimeBindings().Resolve("CJ_MCC_ThrowException");
+    auto* factoryAddress = std::get_if<void*>(&factory);
+    auto* throwAddress = std::get_if<void*>(&thrower);
+    if (!literal || !factoryAddress || !*factoryAddress || !throwAddress || !*throwAddress ||
+        !expr.GetResult()) {
         ctx.Fail(JitFailureKind::UnresolvedSymbol, expr.GetExprKind());
         return;
     }
     auto& a = ctx.GetAssembler();
-    a.long_().mov(asmjit::x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(*address)));
-    const auto start = a.offset();
+    a.long_().mov(asmjit::x86::rdi, asmjit::imm(reinterpret_cast<uintptr_t>(literal)));
+    a.long_().mov(asmjit::x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(*factoryAddress)));
+    const auto factoryStart = a.offset();
     a.call(asmjit::x86::r11);
-    const auto end = a.offset();
-    if (!ctx.RecordSafepoint(expr)) {
+    const auto factoryEnd = a.offset();
+    if (!ctx.RecordSafepoint(expr) || !MemoryUtils::StoreValue(ctx, expr.GetResult(), asmjit::x86::rax)) {
+        return;
+    }
+    a.mov(asmjit::x86::rdi, asmjit::x86::rax);
+    a.long_().mov(asmjit::x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(*throwAddress)));
+    const auto throwStart = a.offset();
+    a.call(asmjit::x86::r11);
+    const auto throwEnd = a.offset();
+    if (!ctx.RecordSafepoint(expr, expr.GetResult())) {
         return;
     }
     a.ud2();
     if (unwind) {
-        ctx.EmitExceptionLanding(*unwind, start, end);
+        ctx.EmitExceptionLanding(*unwind, factoryStart, factoryEnd);
+        ctx.EmitExceptionLanding(*unwind, throwStart, throwEnd);
     }
 }
 
@@ -177,11 +192,12 @@ void CompileBinaryExpression::Compile(FunctionContext& ctx, const CHIR::BinaryEx
             auto inRange = a.newLabel();
             a.test(asmjit::x86::rcx, asmjit::x86::rcx);
             a.jns(nonnegative);
-            EmitArithmeticException(ctx, expr, unwind, "CJ_JIT_Throw_ShiftNegative");
+            EmitArithmeticException(ctx, expr, unwind, "Overshift: Negative shift count!", false);
             a.bind(nonnegative);
             a.cmp(asmjit::x86::rcx, width);
             a.jl(inRange);
-            EmitArithmeticException(ctx, expr, unwind, "CJ_JIT_Throw_ShiftTooLarge");
+            EmitArithmeticException(ctx, expr, unwind,
+                "Overshift: Value of right operand is greater than or equal to the width of left operand!", false);
             a.bind(inRange);
             if (kind == K::LSHIFT) {
                 a.shl(asmjit::x86::rax, asmjit::x86::cl);
@@ -198,7 +214,7 @@ void CompileBinaryExpression::Compile(FunctionContext& ctx, const CHIR::BinaryEx
             auto done = a.newLabel();
             a.test(asmjit::x86::rcx, asmjit::x86::rcx);
             a.jnz(nonzero);
-            EmitArithmeticException(ctx, expr, unwind, "CJ_JIT_Throw_DivZero");
+            EmitArithmeticException(ctx, expr, unwind, "Divided by zero!", false);
             a.bind(nonzero);
             if (type->IsSignedInteger()) {
                 const uint64_t minimum = uint64_t{1} << (width - 1);
@@ -215,7 +231,7 @@ void CompileBinaryExpression::Compile(FunctionContext& ctx, const CHIR::BinaryEx
                 } else if (expr.GetOverflowStrategy() == OverflowStrategy::WRAPPING) {
                     a.mov(asmjit::x86::rax, minimum);
                 } else {
-                    EmitArithmeticException(ctx, expr, unwind, "CJ_JIT_Throw_Div");
+                    EmitArithmeticException(ctx, expr, unwind, "div");
                 }
                 a.jmp(done);
                 a.bind(divide);

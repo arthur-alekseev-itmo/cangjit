@@ -20,7 +20,7 @@ using LibraryOperation = int (*)(const char*);
 using FindSymbol = void* (*)(const char*, const char*);
 
 constexpr const char* REQUIRED_SYMBOLS[] = {
-    "InitCJRuntime", "FiniCJRuntime", "LoadCJLibrary", "InitCJLibrary", "LoadCJLibraryWithInit",
+    "InitCJRuntime", "FiniCJRuntime", "LoadCJLibraryWithInit",
     "UnloadCJLibrary", "FindCJSymbol", "RunCJTask", "GetTaskRet", "ReleaseHandle", "CJ_MCC_N2CStub",
     "CJ_MCC_ThrowException", "CJ_MCC_GetExceptionWrapper", "CJ_MCC_PostThrowException"
 };
@@ -31,7 +31,7 @@ BindingResult JitRuntimeBindings::Initialize(const RuntimeConfig& config)
     if (runtime != nullptr) {
         return "runtime bindings are already initialized or could not be shut down";
     }
-    const auto& [runtimePath, requestedLibraries, params, owner, stackGrowth, sidecar, bindSidecar] = config;
+    const auto& [runtimePath, requestedLibraries, params, owner, stackGrowth] = config;
     // This is a host assertion, not a runtime switch. Consumers must pass the
     // same value to the metadata encoder; no public query exposes the mode.
     (void)stackGrowth;
@@ -52,20 +52,8 @@ BindingResult JitRuntimeBindings::Initialize(const RuntimeConfig& config)
             }
         }
     }
-    if (!sidecar.empty()) {
-        if (!bindSidecar) {
-            return "a sidecar binder is required";
-        }
-        const auto basename = sidecar.substr(sidecar.find_last_of('/') + 1);
-        if (basename.empty()) {
-            return "sidecar library basename is empty";
-        }
-        for (const auto& library : requestedLibraries) {
-            if (library.substr(library.find_last_of('/') + 1) == basename) {
-                return "sidecar basename conflicts with a native library: " + basename;
-            }
-        }
-    }
+    const auto separator = runtimePath.find_last_of('/');
+    runtimeDirectory = separator == std::string::npos ? "." : runtimePath.substr(0, separator);
 
     runtime = dlopen(runtimePath.c_str(), RTLD_NOW | RTLD_GLOBAL);
     if (!runtime) {
@@ -86,7 +74,7 @@ BindingResult JitRuntimeBindings::Initialize(const RuntimeConfig& config)
             }
             symbols.emplace(name, address);
         }
-        libraries.reserve(requestedLibraries.size() + (sidecar.empty() ? 0 : 1));
+        libraries.reserve(requestedLibraries.size());
         if (owner) {
             int result = reinterpret_cast<InitRuntime>(symbols.at("InitCJRuntime"))(params);
             if (result != 0) {
@@ -106,34 +94,37 @@ BindingResult JitRuntimeBindings::Initialize(const RuntimeConfig& config)
                 return "LoadCJLibraryWithInit failed for " + library + ": " + std::to_string(result);
             }
         }
-        if (!sidecar.empty()) {
-            libraries.push_back(sidecar);
-            int result = reinterpret_cast<LibraryOperation>(symbols.at("LoadCJLibrary"))(sidecar.c_str());
-            if (result != 0) {
-                libraries.pop_back();
-                Shutdown();
-                return "LoadCJLibrary failed for " + sidecar + ": " + std::to_string(result);
-            }
-            // The binder and package initializer may materialize functions and
-            // resolve native symbols before Initialize itself returns.
-            initialized = true;
-            auto error = bindSidecar();
-            if (!error.empty()) {
-                Shutdown();
-                return error;
-            }
-            result = reinterpret_cast<LibraryOperation>(symbols.at("InitCJLibrary"))(sidecar.c_str());
-            if (result != 0) {
-                Shutdown();
-                return "InitCJLibrary failed for " + sidecar + ": " + std::to_string(result);
-            }
-        }
         initialized = true;
         return {};
     } catch (...) {
         Shutdown();
         throw;
     }
+}
+
+BindingResult JitRuntimeBindings::EnsureStandardPackage(std::string_view package)
+{
+    constexpr std::string_view prefix = "std.";
+    if (package.substr(0, prefix.size()) != prefix) {
+        return {};
+    }
+    if (!initialized) {
+        return "runtime bindings are not initialized";
+    }
+    const auto basename = std::string("libcangjie-std-") + std::string(package.substr(prefix.size())) + ".so";
+    for (const auto& library : libraries) {
+        if (library.substr(library.find_last_of('/') + 1) == basename) {
+            return {};
+        }
+    }
+    const auto path = runtimeDirectory + "/" + basename;
+    libraries.push_back(path);
+    const int result = reinterpret_cast<LibraryOperation>(symbols.at("LoadCJLibraryWithInit"))(path.c_str());
+    if (result != 0) {
+        libraries.pop_back();
+        return "LoadCJLibraryWithInit failed for " + path + ": " + std::to_string(result);
+    }
+    return {};
 }
 
 SymbolResult JitRuntimeBindings::Resolve(SymbolName name)

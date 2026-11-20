@@ -7,6 +7,7 @@
 #include "RegisterAllocation.h"
 
 #include <cassert>
+#include <limits>
 #include <ostream>
 #include <utility>
 
@@ -90,6 +91,16 @@ size_t RegisterAllocation::GetLocationCount() const noexcept
 size_t RegisterAllocation::GetStackSlotCount() const noexcept
 {
     return stackSlotCount;
+}
+
+std::optional<size_t> RegisterAllocation::ReserveStackSlots(size_t count) noexcept
+{
+    if (count > std::numeric_limits<size_t>::max() - stackSlotCount) {
+        return std::nullopt;
+    }
+    const auto first = stackSlotCount;
+    stackSlotCount += count;
+    return first;
 }
 
 std::optional<size_t> RegisterAllocation::GetAllocationSlot(ValueNumeration::Id valueId) const noexcept

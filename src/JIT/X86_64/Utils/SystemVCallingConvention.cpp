@@ -10,6 +10,7 @@
 
 #include <array>
 
+#include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Annotation.h"
 #include "cangjie/CHIR/IR/Type/Type.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
@@ -91,16 +92,25 @@ std::optional<bool> HasIndirectReturn(const Type& type, bool isC)
             return std::nullopt;
     }
 }
-} // namespace
 
-std::optional<ParameterPlacement> SystemVCallingConvention::GetNativeParameterPlacement(const CHIR::Function& function)
+bool SameRepresentation(const Type& actual, const Type& abi)
 {
-    // The native override ABI may differ from the body signature; conversion is
-    // not implemented, so no consumer may treat it as callable yet.
-    if (function.Get<CHIR::OverrideSrcFuncType>()) {
-        return std::nullopt;
+    if (&actual == &abi) {
+        return true;
     }
-    const auto* functionType = function.GetFuncType();
+    if (actual.IsRef() && abi.IsRef()) {
+        const auto* actualBase = static_cast<const CHIR::RefType&>(actual).GetBaseType();
+        const auto* abiBase = static_cast<const CHIR::RefType&>(abi).GetBaseType();
+        return actualBase && actualBase->IsClass() && abiBase && abiBase->IsClass();
+    }
+    return actual.GetTypeKind() == abi.GetTypeKind() &&
+        (actual.IsPrimitive() || actual.IsVoid() || actual.IsCPointer() || actual.IsCString());
+}
+
+std::optional<ParameterPlacement> ComputePlacement(const CHIR::Function& function,
+    const CHIR::FuncType* functionType, size_t genericCount, bool isStatic, bool allowBasePointer)
+{
+    const auto* bodyType = function.GetFuncType();
     if (!functionType || functionType->HasVarArg() || !functionType->GetReturnType()) {
         return std::nullopt;
     }
@@ -108,6 +118,10 @@ std::optional<ParameterPlacement> SystemVCallingConvention::GetNativeParameterPl
     const auto* returnType = functionType->GetReturnType();
     const auto parameterTypes = functionType->GetParamTypes();
     const auto& parameters = function.GetParams();
+    if (!bodyType || !bodyType->GetReturnType() ||
+        !SameRepresentation(*bodyType->GetReturnType(), *returnType)) {
+        return std::nullopt;
+    }
     if (parameterTypes.size() != parameters.size()) {
         return std::nullopt;
     }
@@ -146,6 +160,9 @@ std::optional<ParameterPlacement> SystemVCallingConvention::GetNativeParameterPl
             !placement.abiParameterTypes.emplace(parameter, type).second) {
             return std::nullopt;
         }
+        if (!SameRepresentation(*parameter->GetType(), *type)) {
+            return std::nullopt;
+        }
         switch (Classify(*type, isC)) {
             case ArgumentClass::INTEGER:
                 if (!placement.locations.emplace(parameter, nextInteger(Width(*type))).second) {
@@ -164,7 +181,7 @@ std::optional<ParameterPlacement> SystemVCallingConvention::GetNativeParameterPl
             default:
                 return std::nullopt;
         }
-        if (!isC && type->IsRef()) {
+        if (!isC && allowBasePointer && type->IsRef()) {
             const auto& args = type->GetTypeArgs();
             if (!args.empty() && args[0] && (args[0]->IsStruct() || args[0]->IsTuple())) {
                 placement.basePointerLocations.emplace(parameter, nextInteger(OperandWidth::QWORD));
@@ -172,17 +189,14 @@ std::optional<ParameterPlacement> SystemVCallingConvention::GetNativeParameterPl
         }
     }
     if (!isC) {
-        placement.genericTypeInfoLocations.reserve(function.GetGenericTypeParams().size());
-        for (const auto* generic : function.GetGenericTypeParams()) {
-            if (!generic) {
-                return std::nullopt;
-            }
+        placement.genericTypeInfoLocations.reserve(genericCount);
+        for (size_t i = 0; i < genericCount; ++i) {
             placement.genericTypeInfoLocations.emplace_back(nextInteger(OperandWidth::QWORD));
         }
         if (function.GetParentCustomTypeDef()) {
             placement.outerTypeInfoLocation = nextInteger(OperandWidth::QWORD);
         }
-        if (function.TestAttr(CHIR::Attribute::STATIC)) {
+        if (isStatic) {
             placement.thisTypeInfoLocation = nextInteger(OperandWidth::QWORD);
         }
     }
@@ -193,17 +207,30 @@ std::optional<ParameterPlacement> SystemVCallingConvention::GetNativeParameterPl
     placement.stackSize = *stackSize;
     return placement;
 }
+} // namespace
 
-std::optional<ParameterPlacement> SystemVCallingConvention::GetParameterPlacement(const CHIR::Function& function)
+std::optional<ParameterPlacement> SystemVCallingConvention::GetNativeParameterPlacement(const CHIR::Function& function)
 {
-    auto placement = GetNativeParameterPlacement(function);
-    if (!placement || !placement->basePointerLocations.empty() ||
-        !placement->genericTypeInfoLocations.empty() || placement->outerTypeInfoLocation ||
-        placement->thisTypeInfoLocation ||
-        (placement->indirectReturn && !placement->abiReturnType->IsUnit() &&
-            !placement->abiReturnType->IsNothing())) {
+    const auto* overrideType = function.Get<CHIR::OverrideSrcFuncType>();
+    const auto* functionType = overrideType ? overrideType : function.GetFuncType();
+    const auto& generics = function.GetGenericTypeParams();
+    for (const auto* generic : generics) {
+        if (!generic) {
+            return std::nullopt;
+        }
+    }
+    return ComputePlacement(function, functionType, generics.size(), function.TestAttr(CHIR::Attribute::STATIC), true);
+}
+
+std::optional<ParameterPlacement> SystemVCallingConvention::GetVirtualParameterPlacement(
+    const CHIR::DynamicDispatch& expression, bool isStatic)
+{
+    const auto* callee = expression.GetCallee();
+    if (!callee) {
         return std::nullopt;
     }
-    return placement;
+    return ComputePlacement(*callee, expression.GetMethodType(), expression.GetInstantiatedTypeArgs().size(),
+        isStatic, !isStatic);
 }
+
 } // namespace Cangjie::JIT::X86_64

@@ -159,7 +159,7 @@ void CompileFunction::MakeEpilogue(FunctionContext& context) const
     const auto* type = function.GetReturnType();
     if (!type->IsUnit() && !type->IsVoid() && !type->IsNothing()) {
         const auto kind = type->GetTypeKind();
-        const auto width = RegisterUtils::IntegerWidth(*type);
+        const auto width = type->IsBoolean() ? 8U : RegisterUtils::IntegerWidth(*type);
         const bool pointer = type->IsRef() || type->IsCPointer() || type->IsCString();
         if (!width && !pointer && kind != CHIR::Type::TYPE_FLOAT32 && kind != CHIR::Type::TYPE_FLOAT64) {
             context.Fail(JitFailureKind::UnsupportedReturnType);
@@ -196,8 +196,10 @@ void CompileFunction::Compile(FunctionContext& context) const
         context.Fail(JitFailureKind::InvalidFunctionContext);
         return;
     }
-    const auto placements = SystemVCallingConvention::GetParameterPlacement(function);
-    if (!placements) {
+    const auto placements = SystemVCallingConvention::GetNativeParameterPlacement(function);
+    if (!placements || !placements->basePointerLocations.empty() ||
+        (placements->indirectReturn && !placements->abiReturnType->IsUnit() &&
+            !placements->abiReturnType->IsNothing())) {
         context.Fail(JitFailureKind::UnsupportedCallingConvention);
         return;
     }
@@ -214,7 +216,7 @@ void CompileFunction::Compile(FunctionContext& context) const
         }
         const auto* type = parameter->GetType();
         const bool pointer = type->IsRef() || type->IsCPointer() || type->IsCString();
-        const auto width = pointer ? 64U : RegisterUtils::IntegerWidth(*type);
+        const auto width = pointer ? 64U : type->IsBoolean() ? 8U : RegisterUtils::IntegerWidth(*type);
         const bool floating = type->GetTypeKind() == CHIR::Type::TYPE_FLOAT32 ||
             type->GetTypeKind() == CHIR::Type::TYPE_FLOAT64;
         const auto location = placements->locations.find(parameter);
@@ -259,6 +261,48 @@ void CompileFunction::Compile(FunctionContext& context) const
         if (!MemoryUtils::StoreValue(context, parameter, asmjit::x86::rax)) {
             return;
         }
+    }
+    size_t hiddenIndex = 0;
+    auto saveTypeInfo = [&](const Location& location) {
+        const auto offset = context.GetHiddenTypeInfoOffset(hiddenIndex++);
+        if (!offset) {
+            context.Fail(JitFailureKind::UnsupportedCallingConvention);
+            return false;
+        }
+        auto& a = context.GetAssembler();
+        if (const auto* reg = location.AsRegister()) {
+            const auto source = RegisterUtils::Get64BitRegister(reg->type);
+            if (!source) {
+                context.Fail(JitFailureKind::UnsupportedCallingConvention);
+                return false;
+            }
+            a.mov(asmjit::x86::qword_ptr(asmjit::x86::rbp, *offset), *source);
+        } else if (const auto* stack = location.AsIncomingStack()) {
+            constexpr size_t BASE_OFFSET = 2 * sizeof(uint64_t);
+            if (stack->index > (static_cast<size_t>(std::numeric_limits<int32_t>::max()) - BASE_OFFSET) /
+                    sizeof(uint64_t)) {
+                context.Fail(JitFailureKind::UnsupportedCallingConvention);
+                return false;
+            }
+            const auto source = static_cast<int32_t>(BASE_OFFSET + stack->index * sizeof(uint64_t));
+            a.mov(asmjit::x86::rax, asmjit::x86::qword_ptr(asmjit::x86::rbp, source));
+            a.mov(asmjit::x86::qword_ptr(asmjit::x86::rbp, *offset), asmjit::x86::rax);
+        } else {
+            context.Fail(JitFailureKind::UnsupportedCallingConvention);
+            return false;
+        }
+        return true;
+    };
+    for (const auto& location : placements->genericTypeInfoLocations) {
+        if (!saveTypeInfo(location)) {
+            return;
+        }
+    }
+    if (placements->outerTypeInfoLocation && !saveTypeInfo(*placements->outerTypeInfoLocation)) {
+        return;
+    }
+    if (placements->thisTypeInfoLocation && !saveTypeInfo(*placements->thisTypeInfoLocation)) {
+        return;
     }
     auto& assembler = context.GetAssembler();
     assembler.jmp(context.GetBlockLabel(function.GetBody()->GetEntryBlock()));
