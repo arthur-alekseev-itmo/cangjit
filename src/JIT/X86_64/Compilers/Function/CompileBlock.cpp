@@ -173,21 +173,8 @@ void CompileInstanceOf(FunctionContext& context, const CHIR::InstanceOf& express
         context.Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
         return;
     }
-    const auto* targetDef = static_cast<const CHIR::ClassType*>(targetClass)->GetClassDef();
-    if (!targetDef || !context.GetGlobalContext().GetRuntimeBindings()
-        .EnsureStandardPackage(targetDef->GetPackageName()).empty()) {
-        context.Fail(JitFailureKind::UnresolvedSymbol, expression.GetExprKind());
-        return;
-    }
-    auto* lookup = ResolveExceptionSymbol(context, "CJ_MCC_GetTypeByMangledName");
     auto* subtype = ResolveExceptionSymbol(context, "CJ_MCC_IsSubType");
-    if (!lookup || !subtype) {
-        return;
-    }
-    const auto name = CHIR::GetTypeQualifiedName(*targetClass, true);
-    auto* typeInfo = reinterpret_cast<void* (*)(const char*)>(lookup)(name.c_str());
-    if (!typeInfo) {
-        context.Fail(JitFailureKind::UnresolvedSymbol, expression.GetExprKind());
+    if (!subtype || !context.LoadTypeInfo(*targetClass, asmjit::x86::rsi)) {
         return;
     }
     if (!MemoryUtils::LoadValue(context, object, asmjit::x86::rdi)) {
@@ -202,7 +189,6 @@ void CompileInstanceOf(FunctionContext& context, const CHIR::InstanceOf& express
     // The high 16 bits of an object header hold runtime state, not TypeInfo.
     a.shl(asmjit::x86::rdi, 16);
     a.shr(asmjit::x86::rdi, 16);
-    a.long_().mov(asmjit::x86::rsi, asmjit::imm(reinterpret_cast<uintptr_t>(typeInfo)));
     a.long_().mov(asmjit::x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(subtype)));
     a.call(asmjit::x86::r11);
     a.movzx(asmjit::x86::eax, asmjit::x86::al);
