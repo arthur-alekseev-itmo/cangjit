@@ -8,7 +8,8 @@
 #define CANGJIE_JIT_X86_64_COMPILERS_COMPILE_NUMERIC_CAST_H
 
 namespace Cangjie::CHIR {
-class NumericCast;
+class NumericCastBase;
+class Block;
 }
 
 namespace Cangjie::JIT::X86_64 {
@@ -16,7 +17,8 @@ class FunctionContext;
 
 class CompileNumericCast final {
 public:
-    static void Compile(FunctionContext& context, const CHIR::NumericCast& expression);
+    static void Compile(FunctionContext& context, const CHIR::NumericCastBase& expression,
+        const CHIR::Block* normal = nullptr, const CHIR::Block* unwind = nullptr);
 };
 } // namespace Cangjie::JIT::X86_64
 

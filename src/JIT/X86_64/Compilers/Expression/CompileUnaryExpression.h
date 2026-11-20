@@ -6,7 +6,8 @@
 #define CANGJIE_JIT_X86_64_COMPILERS_COMPILE_UNARY_EXPRESSION_H
 
 namespace Cangjie::CHIR {
-class UnaryExpression;
+class UnaryExpressionBase;
+class Block;
 }
 
 namespace Cangjie::JIT::X86_64 {
@@ -14,7 +15,8 @@ class FunctionContext;
 
 class CompileUnaryExpression final {
 public:
-    static void Compile(FunctionContext& ctx, const CHIR::UnaryExpression& expr);
+    static void Compile(FunctionContext& ctx, const CHIR::UnaryExpressionBase& expr,
+        const CHIR::Block* normal = nullptr, const CHIR::Block* unwind = nullptr);
 };
 } // namespace Cangjie::JIT::X86_64
 

@@ -24,9 +24,10 @@ std::optional<uint32_t> StackFrameUtils::GetFrameSize(size_t slotCount) noexcept
 
 std::optional<int32_t> StackFrameUtils::GetSlotOffset(size_t slot, size_t slotCount) noexcept
 {
-    if (slot >= slotCount || slot >= static_cast<size_t>(std::numeric_limits<int32_t>::max()) / SLOT_SIZE) {
+    // The runtime uses the first slot below RBP to recover the function entry.
+    if (slot >= slotCount || slot > static_cast<size_t>(std::numeric_limits<int32_t>::max()) / SLOT_SIZE - 2) {
         return std::nullopt;
     }
-    return -static_cast<int32_t>((slot + 1) * SLOT_SIZE);
+    return -static_cast<int32_t>((slot + 2) * SLOT_SIZE);
 }
 } // namespace Cangjie::JIT::X86_64

@@ -67,32 +67,88 @@ CompilationResult CompileFunction::CompileToAddress(std::ostream* output) const
     if (context.GetError() != asmjit::kErrorOk) {
         return CompilationError{asmjit::DebugUtils::errorAsString(context.GetError())};
     }
+    auto& assembler = context.GetAssembler();
+    constexpr size_t PREFIX_SIZE = sizeof(uint32_t);
+    if (assembler.offset() <= PREFIX_SIZE || assembler.offset() - PREFIX_SIZE > UINT32_MAX) {
+        return CompilationError{"invalid JIT code size"};
+    }
+    const auto codeSize = static_cast<uint32_t>(assembler.offset() - PREFIX_SIZE);
+    const auto slots = context.GetRegisterAllocation().GetStackSlotCount();
+    if (slots == std::numeric_limits<size_t>::max()) {
+        return CompilationError{"JIT stack frame is too large"};
+    }
+    const auto frameSize = StackFrameUtils::GetFrameSize(slots + 1);
+    if (!frameSize) {
+        return CompilationError{"JIT stack frame is too large"};
+    }
+    context.GetMetadataBuilder().RecordFrame(*frameSize, {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX});
+    // The metadata is emitted in the same allocation as the code so that all
+    // descriptor-relative offsets are representable and have the same lifetime.
+    constexpr uintptr_t PROVISIONAL_CODE = 0x10000000;
+    constexpr uintptr_t PROVISIONAL_METADATA = 0x20000000;
+    auto provisional = context.GetMetadataBuilder().Build(PROVISIONAL_METADATA, PROVISIONAL_CODE, codeSize);
+    if (const auto* error = std::get_if<std::string>(&provisional)) {
+        return CompilationError{*error};
+    }
+    assembler.align(asmjit::AlignMode::kData, 4);
+    const size_t metadataOffset = assembler.offset();
+    const auto& bytes = std::get<std::pair<std::vector<uint8_t>, std::array<uint8_t, 4>>>(provisional).first;
+    assembler.embed(bytes.data(), bytes.size());
+    if (context.GetError() != asmjit::kErrorOk) {
+        return CompilationError{asmjit::DebugUtils::errorAsString(context.GetError())};
+    }
     void* address = nullptr;
     const auto error = globalContext.GetRuntime().add(&address, &context.GetCode());
     if (error != asmjit::kErrorOk) {
         return CompilationError{asmjit::DebugUtils::errorAsString(error)};
     }
-    if (!globalContext.GetLazyCallSiteRegistry().Register(
-            reinterpret_cast<CodeAddress>(address), context.GetCode().codeSize(), context.GetLazyCallSites())) {
+    const auto base = reinterpret_cast<CodeAddress>(address);
+    auto metadata = context.GetMetadataBuilder().Build(base + metadataOffset, base + PREFIX_SIZE, codeSize);
+    if (const auto* failure = std::get_if<std::string>(&metadata)) {
+        globalContext.GetRuntime().release(address);
+        return CompilationError{*failure};
+    }
+    const auto& [metadataBytes, prefixBytes] =
+        std::get<std::pair<std::vector<uint8_t>, std::array<uint8_t, 4>>>(metadata);
+    asmjit::JitAllocator::Span span;
+    auto* allocator = globalContext.GetRuntime().allocator();
+    if (metadataBytes.size() != bytes.size() || allocator->query(span, address) != asmjit::kErrorOk ||
+        allocator->write(span, metadataOffset, metadataBytes.data(), metadataBytes.size()) != asmjit::kErrorOk ||
+        allocator->write(span, 0, prefixBytes.data(), prefixBytes.size()) != asmjit::kErrorOk) {
+        globalContext.GetRuntime().release(address);
+        return CompilationError{"failed to publish JIT metadata"};
+    }
+    if (!globalContext.GetLazyCallSiteRegistry().Register(base, context.GetCode().codeSize(), context.GetLazyCallSites())) {
         globalContext.GetRuntime().release(address);
         return CompilationError{"failed to register lazy call sites"};
     }
-    return reinterpret_cast<CodeAddress>(address);
+    return base + PREFIX_SIZE;
 #endif
 }
 
 void CompileFunction::MakePrologue(FunctionContext& context) const
 {
-    const auto size = StackFrameUtils::GetFrameSize(context.GetRegisterAllocation().GetStackSlotCount());
+    const auto slots = context.GetRegisterAllocation().GetStackSlotCount();
+    if (slots == std::numeric_limits<size_t>::max()) {
+        context.Fail(JitFailureKind::StackFrameTooLarge);
+        return;
+    }
+    const auto size = StackFrameUtils::GetFrameSize(slots + 1);
     if (!size) {
         context.Fail(JitFailureKind::StackFrameTooLarge);
         return;
     }
     auto& assembler = context.GetAssembler();
+    // The runtime recovers the entry from the return address at [rbp - 8].
+    // push (1 byte), mov (3 bytes), and the relative call (5 bytes) make
+    // that address exactly entry + 9, as required by FrameInfo.
+    const auto marker = assembler.newLabel();
     assembler.push(asmjit::x86::rbp);
     assembler.mov(asmjit::x86::rbp, asmjit::x86::rsp);
-    if (*size != 0) {
-        assembler.sub(asmjit::x86::rsp, *size);
+    assembler.call(marker);
+    assembler.bind(marker);
+    if (*size > sizeof(uint64_t)) {
+        assembler.sub(asmjit::x86::rsp, *size - sizeof(uint64_t));
     }
 }
 
@@ -102,14 +158,32 @@ void CompileFunction::MakeEpilogue(FunctionContext& context) const
     assembler.bind(context.GetEpilogueLabel());
     const auto* type = function.GetReturnType();
     if (!type->IsUnit() && !type->IsVoid() && !type->IsNothing()) {
-        if (type->GetTypeKind() != CHIR::Type::TYPE_INT64 && type->GetTypeKind() != CHIR::Type::TYPE_UINT64) {
+        const auto kind = type->GetTypeKind();
+        const auto width = RegisterUtils::IntegerWidth(*type);
+        const bool pointer = type->IsRef() || type->IsCPointer() || type->IsCString();
+        if (!width && !pointer && kind != CHIR::Type::TYPE_FLOAT32 && kind != CHIR::Type::TYPE_FLOAT64) {
             context.Fail(JitFailureKind::UnsupportedReturnType);
             return;
         }
         if (!MemoryUtils::LoadValue(context, function.GetReturnValue(), asmjit::x86::rax)) {
             return;
         }
-        assembler.mov(asmjit::x86::rax, asmjit::x86::qword_ptr(asmjit::x86::rax));
+        if (kind == CHIR::Type::TYPE_FLOAT32) {
+            assembler.movss(asmjit::x86::xmm0, asmjit::x86::dword_ptr(asmjit::x86::rax));
+        } else if (kind == CHIR::Type::TYPE_FLOAT64) {
+            assembler.movsd(asmjit::x86::xmm0, asmjit::x86::qword_ptr(asmjit::x86::rax));
+        } else if (width == 8) {
+            assembler.movzx(asmjit::x86::eax, asmjit::x86::byte_ptr(asmjit::x86::rax));
+            RegisterUtils::NormalizeInteger(assembler, asmjit::x86::rax, width, type->IsSignedInteger());
+        } else if (width == 16) {
+            assembler.movzx(asmjit::x86::eax, asmjit::x86::word_ptr(asmjit::x86::rax));
+            RegisterUtils::NormalizeInteger(assembler, asmjit::x86::rax, width, type->IsSignedInteger());
+        } else if (width == 32) {
+            assembler.mov(asmjit::x86::eax, asmjit::x86::dword_ptr(asmjit::x86::rax));
+            RegisterUtils::NormalizeInteger(assembler, asmjit::x86::rax, width, type->IsSignedInteger());
+        } else {
+            assembler.mov(asmjit::x86::rax, asmjit::x86::qword_ptr(asmjit::x86::rax));
+        }
     }
     assembler.mov(asmjit::x86::rsp, asmjit::x86::rbp);
     assembler.pop(asmjit::x86::rbp);
@@ -127,6 +201,8 @@ void CompileFunction::Compile(FunctionContext& context) const
         context.Fail(JitFailureKind::UnsupportedCallingConvention);
         return;
     }
+    // Runtime metadata discovery reads a relative descriptor pointer here.
+    context.GetAssembler().embedUInt32(0);
     MakePrologue(context);
     if (context.GetFailure()) {
         return;
@@ -136,10 +212,14 @@ void CompileFunction::Compile(FunctionContext& context) const
             context.Fail(JitFailureKind::UnsupportedParameters);
             return;
         }
-        const auto width = RegisterUtils::IntegerWidth(*parameter->GetType());
+        const auto* type = parameter->GetType();
+        const bool pointer = type->IsRef() || type->IsCPointer() || type->IsCString();
+        const auto width = pointer ? 64U : RegisterUtils::IntegerWidth(*type);
+        const bool floating = type->GetTypeKind() == CHIR::Type::TYPE_FLOAT32 ||
+            type->GetTypeKind() == CHIR::Type::TYPE_FLOAT64;
         const auto location = placements->locations.find(parameter);
         const auto id = context.GetValueNumeration().GetId(parameter);
-        if (!width || location == placements->locations.end() || !id ||
+        if ((!width && !floating) || location == placements->locations.end() || !id ||
             *id >= context.GetRegisterAllocation().GetLocationCount() ||
             !context.GetRegisterAllocation().GetLocation(*id).IsStack()) {
             context.Fail(JitFailureKind::UnsupportedParameters);
@@ -153,6 +233,13 @@ void CompileFunction::Compile(FunctionContext& context) const
                 return;
             }
             a.mov(asmjit::x86::rax, *source);
+        } else if (const auto* simd = location->second.AsSimdRegister()) {
+            const auto source = RegisterUtils::GetArgumentSimdRegister(simd->index);
+            if (!floating || !source || !MemoryUtils::StoreFloatValue(context, parameter, *source, asmjit::x86::rax)) {
+                context.Fail(JitFailureKind::UnsupportedParameters);
+                return;
+            }
+            continue;
         } else if (const auto* stack = location->second.AsIncomingStack()) {
             constexpr size_t BASE_OFFSET = 2 * sizeof(uint64_t);
             if (stack->index > (static_cast<size_t>(std::numeric_limits<int32_t>::max()) - BASE_OFFSET) /
@@ -166,7 +253,9 @@ void CompileFunction::Compile(FunctionContext& context) const
             context.Fail(JitFailureKind::UnsupportedParameters);
             return;
         }
-        RegisterUtils::NormalizeInteger(a, asmjit::x86::rax, width, parameter->GetType()->IsSignedInteger());
+        if (width) {
+            RegisterUtils::NormalizeInteger(a, asmjit::x86::rax, width, type->IsSignedInteger());
+        }
         if (!MemoryUtils::StoreValue(context, parameter, asmjit::x86::rax)) {
             return;
         }

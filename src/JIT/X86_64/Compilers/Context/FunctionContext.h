@@ -14,12 +14,14 @@
 #include <vector>
 
 #include "JitFailure.h"
+#include "../../JitMetadataBuilder.h"
 #include "../../LazyCalls/LazyCallSiteRegistry.h"
 #include "../../RegisterAllocation/InterferenceGraph.h"
 #include "../../RegisterAllocation/RegisterAllocation.h"
 #include "../../RegisterAllocation/ValueNumeration.h"
 
 namespace Cangjie::CHIR {
+class Expression;
 class Block;
 class Function;
 }
@@ -35,6 +37,9 @@ public:
     GlobalContext& GetGlobalContext() const noexcept;
     asmjit::CodeHolder& GetCode() noexcept;
     asmjit::x86::Assembler& GetAssembler() noexcept;
+    JitMetadataBuilder& GetMetadataBuilder() noexcept;
+    bool RecordSafepoint(const CHIR::Expression& expression);
+    bool EmitExceptionLanding(const CHIR::Block& block, size_t callStart, size_t callEnd);
     asmjit::Error GetError() const noexcept;
     asmjit::Label GetBlockLabel(const CHIR::Block* block);
     asmjit::Label GetEpilogueLabel() const noexcept;
@@ -67,6 +72,7 @@ private:
     asmjit::CodeHolder code;
     asmjit::x86::Assembler assembler;
     asmjit::Error error;
+    JitMetadataBuilder metadataBuilder;
     std::optional<JitFailure> failure;
     asmjit::Label epilogueLabel;
     std::unordered_map<const CHIR::Block*, asmjit::Label> blockLabels;

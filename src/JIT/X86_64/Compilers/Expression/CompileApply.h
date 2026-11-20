@@ -9,6 +9,7 @@
 
 namespace Cangjie::CHIR {
 class Apply;
+class TryApply;
 }
 
 namespace Cangjie::JIT::X86_64 {
@@ -17,6 +18,7 @@ class FunctionContext;
 class CompileApply final {
 public:
     static void Compile(FunctionContext& ctx, const CHIR::Apply& expr);
+    static void Compile(FunctionContext& ctx, const CHIR::TryApply& expr);
 };
 } // namespace Cangjie::JIT::X86_64
 

@@ -6,13 +6,17 @@
 
 #include "MemoryUtils.h"
 
+#include <cstring>
 #include <limits>
 
 #include "RegisterUtils.h"
 #include "StackFrameUtils.h"
 
 #include "../Compilers/Context/FunctionContext.h"
+#include "../Compilers/Context/GlobalContext.h"
 #include "../Location.h"
+#include "cangjie/JIT/JitSymbols.h"
+#include "cangjie/CHIR/IR/Type/Type.h"
 #include "cangjie/CHIR/IR/Value/LiteralValue.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
 
@@ -49,6 +53,12 @@ bool ResolveLocation(FunctionContext& context, const Location& location, JitFail
     return false;
 }
 
+bool HasAggregateValueType(const CHIR::Value* value)
+{
+    const auto* type = value ? value->GetType() : nullptr;
+    return type && (type->IsStruct() || type->IsTuple() || type->IsVArray() || type->IsEnum());
+}
+
 bool IsMoveRegister(FunctionContext& context, const asmjit::x86::Gp& reg)
 {
     if (!RegisterUtils::IsDataRegister(reg)) {
@@ -65,6 +75,13 @@ bool MemoryUtils::LoadValue(FunctionContext& context, const CHIR::Value* value, 
         context.Fail(JitFailureKind::MissingOperand);
         return false;
     }
+    // Aggregate values cannot be represented by a single scalar stack slot.
+    // Until their native layout and GC map are available, do not silently
+    // interpret the first word as the whole value.
+    if (HasAggregateValueType(value)) {
+        context.Fail(JitFailureKind::UnsupportedOperandLocation);
+        return false;
+    }
     if (!IsMoveRegister(context, target)) {
         return false;
     }
@@ -75,10 +92,46 @@ bool MemoryUtils::LoadValue(FunctionContext& context, const CHIR::Value* value, 
             assembler.mov(target, static_cast<const CHIR::BoolLiteral*>(literal)->GetVal() ? 1 : 0);
         } else if (literal->IsIntLiteral()) {
             assembler.mov(target, asmjit::imm(static_cast<const CHIR::IntLiteral*>(literal)->GetUnsignedVal()));
+        } else if (literal->IsRuneLiteral()) {
+            assembler.mov(target, static_cast<uint32_t>(static_cast<const CHIR::RuneLiteral*>(literal)->GetVal()));
+        } else if (literal->IsNullLiteral()) {
+            assembler.xor_(target.r32(), target.r32());
+        } else if (literal->IsFloatLiteral() && value->GetType()) {
+            const auto val = static_cast<const CHIR::FloatLiteral*>(literal)->GetVal();
+            if (value->GetType()->GetTypeKind() == CHIR::Type::TYPE_FLOAT32) {
+                const float converted = static_cast<float>(val);
+                uint32_t bits;
+                std::memcpy(&bits, &converted, sizeof(bits));
+                assembler.mov(target, asmjit::imm(bits));
+            } else if (value->GetType()->GetTypeKind() == CHIR::Type::TYPE_FLOAT64) {
+                uint64_t bits;
+                std::memcpy(&bits, &val, sizeof(bits));
+                assembler.mov(target, asmjit::imm(bits));
+            } else {
+                context.Fail(JitFailureKind::UnsupportedLiteral);
+                return false;
+            }
         } else {
             context.Fail(JitFailureKind::UnsupportedLiteral);
             return false;
         }
+        return context.GetError() == asmjit::kErrorOk;
+    }
+    if (value->IsGlobalVar()) {
+        const auto name = value->IsImportedVar() ? value->GetIdentifierWithoutPrefix() :
+            JitGlobalSlotName(value->GetIdentifierWithoutPrefix());
+        auto resolved = context.GetGlobalContext().GetRuntimeBindings().Resolve(name);
+        const auto* symbol = std::get_if<void*>(&resolved);
+        if (!symbol || !*symbol) {
+            context.Fail(JitFailureKind::UnresolvedSymbol);
+            return false;
+        }
+        const auto address = value->IsImportedVar() ? *symbol : *static_cast<void* const*>(*symbol);
+        if (!address) {
+            context.Fail(JitFailureKind::UnresolvedSymbol);
+            return false;
+        }
+        assembler.mov(target, asmjit::imm(reinterpret_cast<uintptr_t>(address)));
         return context.GetError() == asmjit::kErrorOk;
     }
     auto id = context.GetValueNumeration().GetId(value);
@@ -103,6 +156,10 @@ bool MemoryUtils::LoadValue(FunctionContext& context, const CHIR::Value* value, 
 
 bool MemoryUtils::StoreValue(FunctionContext& context, const CHIR::Value* value, const asmjit::x86::Gp& source)
 {
+    if (HasAggregateValueType(value)) {
+        context.Fail(JitFailureKind::UnsupportedResultLocation);
+        return false;
+    }
     if (!IsMoveRegister(context, source)) {
         return false;
     }
@@ -125,6 +182,56 @@ bool MemoryUtils::StoreValue(FunctionContext& context, const CHIR::Value* value,
         assembler.mov(destination.memory, source);
     }
     return context.GetError() == asmjit::kErrorOk;
+}
+
+bool MemoryUtils::LoadFloatValue(FunctionContext& context, const CHIR::Value* value,
+    const asmjit::x86::Xmm& target, const asmjit::x86::Gp& scratch)
+{
+    if (!value || !value->GetType()) {
+        context.Fail(JitFailureKind::MissingOperand);
+        return false;
+    }
+    const auto kind = value->GetType()->GetTypeKind();
+    if (kind != CHIR::Type::TYPE_FLOAT16 && kind != CHIR::Type::TYPE_FLOAT32 &&
+        kind != CHIR::Type::TYPE_FLOAT64) {
+        context.Fail(JitFailureKind::UnsupportedOperandLocation);
+        return false;
+    }
+    if (!LoadValue(context, value, scratch)) {
+        return false;
+    }
+    auto& assembler = context.GetAssembler();
+    if (kind == CHIR::Type::TYPE_FLOAT64) {
+        assembler.movq(target, scratch);
+    } else {
+        assembler.movd(target, scratch.r32());
+    }
+    return context.GetError() == asmjit::kErrorOk;
+}
+
+bool MemoryUtils::StoreFloatValue(FunctionContext& context, const CHIR::Value* value,
+    const asmjit::x86::Xmm& source, const asmjit::x86::Gp& scratch)
+{
+    if (!value || !value->GetType()) {
+        context.Fail(JitFailureKind::MissingOperand);
+        return false;
+    }
+    const auto kind = value->GetType()->GetTypeKind();
+    if (kind != CHIR::Type::TYPE_FLOAT16 && kind != CHIR::Type::TYPE_FLOAT32 &&
+        kind != CHIR::Type::TYPE_FLOAT64) {
+        context.Fail(JitFailureKind::UnsupportedResultLocation);
+        return false;
+    }
+    if (!IsMoveRegister(context, scratch)) {
+        return false;
+    }
+    auto& assembler = context.GetAssembler();
+    if (kind == CHIR::Type::TYPE_FLOAT64) {
+        assembler.movq(scratch, source);
+    } else {
+        assembler.movd(scratch.r32(), source);
+    }
+    return StoreValue(context, value, scratch);
 }
 
 void MemoryUtils::ReserveStack(FunctionContext& context, uint32_t size)

@@ -24,6 +24,14 @@ std::optional<asmjit::x86::Gpq> RegisterUtils::Get64BitRegister(RegisterType typ
     return registers[index];
 }
 
+std::optional<asmjit::x86::Xmm> RegisterUtils::GetArgumentSimdRegister(size_t index) noexcept
+{
+    namespace x86 = asmjit::x86;
+    static const std::array<x86::Xmm, 8> registers = {
+        x86::xmm0, x86::xmm1, x86::xmm2, x86::xmm3, x86::xmm4, x86::xmm5, x86::xmm6, x86::xmm7};
+    return index < registers.size() ? std::optional<x86::Xmm>(registers[index]) : std::nullopt;
+}
+
 bool RegisterUtils::IsDataRegister(const asmjit::x86::Gp& reg) noexcept
 {
     return reg.isGpq() && reg.id() <= asmjit::x86::Gp::kIdR15 &&

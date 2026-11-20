@@ -6,6 +6,7 @@
 
 #include "CompileBlock.h"
 
+#include "../Context/GlobalContext.h"
 #include "../Expression/CompileApply.h"
 #include "../Expression/CompileBinaryExpression.h"
 #include "../Expression/CompileConstant.h"
@@ -106,6 +107,82 @@ void CompileStore(FunctionContext& context, const CHIR::Store& expression)
         default: context.Fail(JitFailureKind::UnsupportedMemoryAccess); return;
     }
 }
+void* ResolveExceptionSymbol(FunctionContext& context, const char* name)
+{
+    auto symbol = context.GetGlobalContext().GetRuntimeBindings().Resolve(name);
+    auto* address = std::get_if<void*>(&symbol);
+    if (!address || !*address) {
+        context.Fail(JitFailureKind::UnresolvedSymbol);
+        return nullptr;
+    }
+    return *address;
+}
+
+void CompileGetException(FunctionContext& context, const CHIR::GetException& expression)
+{
+    auto* target = ResolveExceptionSymbol(context, "CJ_MCC_GetExceptionWrapper");
+    if (!target) {
+        return;
+    }
+    auto& a = context.GetAssembler();
+    a.long_().mov(asmjit::x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(target)));
+    a.call(asmjit::x86::r11);
+    if (context.RecordSafepoint(expression)) {
+        MemoryUtils::StoreValue(context, expression.GetResult(), asmjit::x86::rax);
+    }
+}
+
+void CompileBeginCatch(FunctionContext& context, const CHIR::IntrinsicBase& expression,
+    const CHIR::Block* normal = nullptr, const CHIR::Block* unwind = nullptr)
+{
+    if (expression.GetIntrinsicKind() != CHIR::IntrinsicKind::BEGIN_CATCH ||
+        expression.GetSuccessorIndex(0) != 1) {
+        context.Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
+        return;
+    }
+    auto* target = ResolveExceptionSymbol(context, "CJ_MCC_PostThrowException");
+    if (!target || !MemoryUtils::LoadValue(context, expression.GetOperand(0), asmjit::x86::rdi)) {
+        return;
+    }
+    auto& a = context.GetAssembler();
+    a.long_().mov(asmjit::x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(target)));
+    const auto callStart = a.offset();
+    a.call(asmjit::x86::r11);
+    const auto callEnd = a.offset();
+    if (context.RecordSafepoint(expression)) {
+        MemoryUtils::StoreValue(context, expression.GetResult(), asmjit::x86::rax);
+    }
+    if (normal && unwind && !context.GetFailure()) {
+        a.jmp(context.GetBlockLabel(normal));
+        context.EmitExceptionLanding(*unwind, callStart, callEnd);
+    }
+}
+
+void CompileRaiseException(FunctionContext& context, const CHIR::RaiseException& expression)
+{
+    const auto* value = expression.GetExceptionValue();
+    if (!value || !value->GetType() || (!value->GetType()->IsRef() && !value->GetType()->IsGeneric())) {
+        context.Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
+        return;
+    }
+    auto* target = ResolveExceptionSymbol(context, "CJ_MCC_ThrowException");
+    if (!target || !MemoryUtils::LoadValue(context, value, asmjit::x86::rdi)) {
+        return;
+    }
+    auto& a = context.GetAssembler();
+    a.long_().mov(asmjit::x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(target)));
+    const auto callStart = a.offset();
+    a.call(asmjit::x86::r11);
+    const auto callEnd = a.offset();
+    if (!context.RecordSafepoint(expression)) {
+        return;
+    }
+    a.ud2();
+    if (const auto* block = expression.GetExceptionBlock()) {
+        context.EmitExceptionLanding(*block, callStart, callEnd);
+    }
+}
+
 } // namespace
 
 void CompileBlock::Compile(FunctionContext& context, const CHIR::Block& block)
@@ -128,12 +205,42 @@ void CompileBlock::CompileExpression(FunctionContext& context, const CHIR::Expre
         case CHIR::ExprKind::APPLY:
             CompileApply::Compile(context, static_cast<const CHIR::Apply&>(expression));
             break;
+        case CHIR::ExprKind::TRY_APPLY:
+            CompileApply::Compile(context, static_cast<const CHIR::TryApply&>(expression));
+            break;
+        case CHIR::ExprKind::GET_EXCEPTION:
+            CompileGetException(context, static_cast<const CHIR::GetException&>(expression));
+            break;
+        case CHIR::ExprKind::INTRINSIC:
+            CompileBeginCatch(context, static_cast<const CHIR::Intrinsic&>(expression));
+            break;
+        case CHIR::ExprKind::TRY_INTRINSIC: {
+            const auto& intrinsic = static_cast<const CHIR::TryIntrinsic&>(expression);
+            if (!intrinsic.GetSuccessBlock() || !intrinsic.GetErrorBlock()) {
+                context.Fail(JitFailureKind::MissingBranchDestination);
+                break;
+            }
+            CompileBeginCatch(context, intrinsic, intrinsic.GetSuccessBlock(), intrinsic.GetErrorBlock());
+            break;
+        }
+        case CHIR::ExprKind::RAISE_EXCEPTION:
+            CompileRaiseException(context, static_cast<const CHIR::RaiseException&>(expression));
+            break;
         case CHIR::ExprKind::CONSTANT:
             CompileConstant::Compile(context, static_cast<const CHIR::Constant&>(expression));
             break;
         case CHIR::ExprKind::NUMERIC_CAST:
             CompileNumericCast::Compile(context, static_cast<const CHIR::NumericCast&>(expression));
             break;
+        case CHIR::ExprKind::TRY_NUMERIC_CAST: {
+            const auto& cast = static_cast<const CHIR::TryNumericCast&>(expression);
+            if (!cast.GetSuccessBlock() || !cast.GetErrorBlock()) {
+                context.Fail(JitFailureKind::MissingBranchDestination);
+                break;
+            }
+            CompileNumericCast::Compile(context, cast, cast.GetSuccessBlock(), cast.GetErrorBlock());
+            break;
+        }
         case CHIR::ExprKind::DEBUGEXPR:
             CompileDebug::Compile(context, static_cast<const CHIR::Debug&>(expression));
             break;
@@ -151,6 +258,15 @@ void CompileBlock::CompileExpression(FunctionContext& context, const CHIR::Expre
         case CHIR::ExprKind::BITNOT:
             CompileUnaryExpression::Compile(context, static_cast<const CHIR::UnaryExpression&>(expression));
             break;
+        case CHIR::ExprKind::TRY_NEG: {
+            const auto& unary = static_cast<const CHIR::TryUnaryExpression&>(expression);
+            if (!unary.GetSuccessBlock() || !unary.GetErrorBlock()) {
+                context.Fail(JitFailureKind::MissingBranchDestination);
+                break;
+            }
+            CompileUnaryExpression::Compile(context, unary, unary.GetSuccessBlock(), unary.GetErrorBlock());
+            break;
+        }
         case CHIR::ExprKind::ADD:
         case CHIR::ExprKind::SUB:
         case CHIR::ExprKind::MUL:
@@ -172,6 +288,21 @@ void CompileBlock::CompileExpression(FunctionContext& context, const CHIR::Expre
         case CHIR::ExprKind::OR:
             CompileBinaryExpression::Compile(context, static_cast<const CHIR::BinaryExpression&>(expression));
             break;
+        case CHIR::ExprKind::TRY_ADD:
+        case CHIR::ExprKind::TRY_SUB:
+        case CHIR::ExprKind::TRY_MUL:
+        case CHIR::ExprKind::TRY_DIV:
+        case CHIR::ExprKind::TRY_LSHIFT:
+        case CHIR::ExprKind::TRY_RSHIFT:
+        case CHIR::ExprKind::TRY_MOD: {
+            const auto& binary = static_cast<const CHIR::TryBinaryExpression&>(expression);
+            if (!binary.GetSuccessBlock() || !binary.GetErrorBlock()) {
+                context.Fail(JitFailureKind::MissingBranchDestination);
+                break;
+            }
+            CompileBinaryExpression::Compile(context, binary, binary.GetSuccessBlock(), binary.GetErrorBlock());
+            break;
+        }
         case CHIR::ExprKind::GOTO:
             CompileGoTo::Compile(context, static_cast<const CHIR::GoTo&>(expression));
             break;

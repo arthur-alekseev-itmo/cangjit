@@ -9,9 +9,12 @@
 
 #include <iosfwd>
 #include <memory>
+#include <string>
+#include <vector>
 
 namespace Cangjie::CHIR {
 class Package;
+class Function;
 }
 
 namespace Cangjie::JIT::X86_64 {
@@ -21,11 +24,15 @@ class X86_64Compiler {
 public:
     X86_64Compiler();
     ~X86_64Compiler();
+    void SetSidecar(std::string path, std::vector<const CHIR::Function*> functions);
 
     void Compile(const CHIR::Package& package, std::ostream& output) const;
 
 private:
     std::unique_ptr<GlobalContext> globalContext;
+    mutable bool runtimeConfigured = false;
+    std::string sidecarPath;
+    std::vector<const CHIR::Function*> sidecarFunctions;
 };
 } // namespace Cangjie::JIT::X86_64
 

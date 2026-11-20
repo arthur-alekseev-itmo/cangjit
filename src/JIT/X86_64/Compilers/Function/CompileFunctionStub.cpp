@@ -8,12 +8,18 @@
 
 #include <asmjit/x86.h>
 
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
+#include <optional>
+#include <vector>
 
 #include "../Context/GlobalContext.h"
+#include "../../JitMetadataBuilder.h"
+#include "../../Utils/SystemVCallingConvention.h"
 #include "CompileFunction.h"
+#include "cangjie/CHIR/IR/Annotation.h"
 #include "cangjie/CHIR/IR/Type/Type.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
 
@@ -32,21 +38,19 @@ CodeAddress ResolveAndPatch(GlobalContext* context, FunctionRecord* record, Code
 {
     try {
         const auto* found = context->GetLazyCallSiteRegistry().Find(returnAddress);
-        if (!found || found->callee != record) {
-            std::fputs("JIT lazy call site is invalid\n", stderr);
-            std::abort();
-        }
-        const auto site = *found;
+        const auto site = found && found->callee == record ? std::optional<LazyCallSite>(*found) : std::nullopt;
         auto result = context->GetFunctionResolver().Resolve(*record, Materialize, context);
         if (const auto* address = std::get_if<CodeAddress>(&result)) {
-            auto* allocator = context->GetRuntime().allocator();
-            JitAllocator::Span span;
-            const uint64_t target = *address;
-            if (allocator->query(span, reinterpret_cast<void*>(site.caller)) != kErrorOk ||
-                reinterpret_cast<CodeAddress>(span.rx()) != site.caller ||
-                allocator->write(span, site.immediateOffset, &target, sizeof(target)) != kErrorOk) {
-                std::fputs("JIT failed to patch lazy call site\n", stderr);
-                std::abort();
+            if (site) {
+                auto* allocator = context->GetRuntime().allocator();
+                JitAllocator::Span span;
+                const uint64_t target = *address;
+                if (allocator->query(span, reinterpret_cast<void*>(site->caller)) != kErrorOk ||
+                    reinterpret_cast<CodeAddress>(span.rx()) != site->caller ||
+                    allocator->write(span, site->immediateOffset, &target, sizeof(target)) != kErrorOk) {
+                    std::fputs("JIT failed to patch lazy call site\n", stderr);
+                    std::abort();
+                }
             }
             return *address;
         }
@@ -58,37 +62,68 @@ CodeAddress ResolveAndPatch(GlobalContext* context, FunctionRecord* record, Code
     std::abort();
 }
 
-bool SupportedSignature(const CHIR::Function& function, size_t& stackArguments)
+bool IsObjectReference(const CHIR::Type& type)
 {
-    if (function.IsCFunc() || !function.GetFuncType() || function.GetFuncType()->HasVarArg() ||
-        !function.GetReturnType()) {
+    if (!type.IsRef()) {
         return false;
     }
-    const auto& returnType = *function.GetReturnType();
-    const auto kind = returnType.GetTypeKind();
-    if (kind != CHIR::Type::TYPE_INT64 && kind != CHIR::Type::TYPE_UINT64 &&
-        !returnType.IsUnit() && !returnType.IsVoid() && !returnType.IsNothing()) {
+    const auto* base = static_cast<const CHIR::RefType&>(type).GetBaseType();
+    return base && (base->IsClass() || base->IsRawArray() || base->IsBox());
+}
+
+bool SupportedSignature(const CHIR::Function& function, std::vector<int32_t>& gcSlots)
+{
+    if (function.IsCFunc() || function.Get<CHIR::OverrideSrcFuncType>()) {
         return false;
     }
-    size_t argumentCount = (returnType.IsUnit() || returnType.IsNothing()) ? 1 : 0;
+    const auto placement = SystemVCallingConvention::GetNativeParameterPlacement(function);
+    if (!placement || placement->indirectReturn || !placement->basePointerLocations.empty()) {
+        return false;
+    }
+    const auto supported = [](const CHIR::Type& type) {
+        const auto kind = type.GetTypeKind();
+        return type.IsInteger() || kind == CHIR::Type::TYPE_FLOAT32 || kind == CHIR::Type::TYPE_FLOAT64 ||
+            IsObjectReference(type);
+    };
+    const auto* result = placement->abiReturnType;
+    if (!result || (!result->IsVoid() && !supported(*result))) {
+        return false;
+    }
     for (const auto* parameter : function.GetParams()) {
-        if (!parameter || !parameter->GetType() || !parameter->GetType()->IsInteger()) {
+        const auto type = placement->abiParameterTypes.find(parameter);
+        const auto location = placement->locations.find(parameter);
+        if (!parameter || type == placement->abiParameterTypes.end() || !type->second ||
+            location == placement->locations.end() || !supported(*type->second)) {
             return false;
         }
-        ++argumentCount;
+        if (!IsObjectReference(*type->second)) {
+            continue;
+        }
+        if (const auto* reg = location->second.AsRegister()) {
+            if (reg->index >= 6) {
+                return false;
+            }
+            gcSlots.push_back(-16 - static_cast<int32_t>(reg->index * 8));
+        } else if (const auto* stack = location->second.AsIncomingStack()) {
+            if (stack->index > (std::numeric_limits<int32_t>::max() - 16) / 8) {
+                return false;
+            }
+            gcSlots.push_back(16 + static_cast<int32_t>(stack->index * 8));
+        } else {
+            return false;
+        }
     }
-    stackArguments = argumentCount > 6 ? argumentCount - 6 : 0;
-    return stackArguments <= (static_cast<size_t>(std::numeric_limits<int32_t>::max()) - 15) / 8;
+    return true;
 }
 
 class ResolverStubEmitter final {
 public:
     explicit ResolverStubEmitter(Assembler& assembler) : a(assembler) {}
 
-    bool Emit(GlobalContext& context, FunctionRecord& record)
+    bool Emit(GlobalContext& context, FunctionRecord& record, void* c2nStub, uint32_t& safepoint)
     {
         SaveArguments();
-        ResolveAndJump(context, record);
+        ResolveAndJump(context, record, c2nStub, safepoint);
         return ok;
     }
 
@@ -103,28 +138,54 @@ private:
     {
         Emit(a.push(rbp));
         Emit(a.mov(rbp, rsp));
-        Emit(a.push(rdi));
-        Emit(a.push(rsi));
-        Emit(a.push(rdx));
-        Emit(a.push(rcx));
-        Emit(a.push(r8));
-        Emit(a.push(r9));
+        const auto marker = a.newLabel();
+        Emit(a.call(marker));
+        Emit(a.bind(marker));
+        // The marker occupies [rbp-8]. Keep RSP 16-byte aligned at the call.
+        Emit(a.sub(rsp, 184));
+        Emit(a.mov(qword_ptr(rbp, -16), rdi));
+        Emit(a.mov(qword_ptr(rbp, -24), rsi));
+        Emit(a.mov(qword_ptr(rbp, -32), rdx));
+        Emit(a.mov(qword_ptr(rbp, -40), rcx));
+        Emit(a.mov(qword_ptr(rbp, -48), r8));
+        Emit(a.mov(qword_ptr(rbp, -56), r9));
+        Emit(a.movdqu(xmmword_ptr(rbp, -72), xmm0));
+        Emit(a.movdqu(xmmword_ptr(rbp, -88), xmm1));
+        Emit(a.movdqu(xmmword_ptr(rbp, -104), xmm2));
+        Emit(a.movdqu(xmmword_ptr(rbp, -120), xmm3));
+        Emit(a.movdqu(xmmword_ptr(rbp, -136), xmm4));
+        Emit(a.movdqu(xmmword_ptr(rbp, -152), xmm5));
+        Emit(a.movdqu(xmmword_ptr(rbp, -168), xmm6));
+        Emit(a.movdqu(xmmword_ptr(rbp, -184), xmm7));
     }
 
-    void ResolveAndJump(GlobalContext& context, FunctionRecord& record)
+    void ResolveAndJump(GlobalContext& context, FunctionRecord& record, void* c2nStub, uint32_t& safepoint)
     {
         Emit(a.mov(rdi, reinterpret_cast<uintptr_t>(&context)));
         Emit(a.mov(rsi, reinterpret_cast<uintptr_t>(&record)));
         Emit(a.mov(rdx, qword_ptr(rbp, 8)));
         Emit(a.mov(rax, reinterpret_cast<uintptr_t>(&ResolveAndPatch)));
+        Emit(a.push(rax));
+        Emit(a.push(0));
+        Emit(a.mov(rax, reinterpret_cast<uintptr_t>(c2nStub)));
         Emit(a.call(rax));
+        // CJ_MCC_C2NStub removes both stack words before returning.
+        safepoint = static_cast<uint32_t>(a.offset() - 4);
         Emit(a.mov(r11, rax));
-        Emit(a.mov(rdi, qword_ptr(rbp, -8)));
-        Emit(a.mov(rsi, qword_ptr(rbp, -16)));
-        Emit(a.mov(rdx, qword_ptr(rbp, -24)));
-        Emit(a.mov(rcx, qword_ptr(rbp, -32)));
-        Emit(a.mov(r8, qword_ptr(rbp, -40)));
-        Emit(a.mov(r9, qword_ptr(rbp, -48)));
+        Emit(a.mov(rdi, qword_ptr(rbp, -16)));
+        Emit(a.mov(rsi, qword_ptr(rbp, -24)));
+        Emit(a.mov(rdx, qword_ptr(rbp, -32)));
+        Emit(a.mov(rcx, qword_ptr(rbp, -40)));
+        Emit(a.mov(r8, qword_ptr(rbp, -48)));
+        Emit(a.mov(r9, qword_ptr(rbp, -56)));
+        Emit(a.movdqu(xmm0, xmmword_ptr(rbp, -72)));
+        Emit(a.movdqu(xmm1, xmmword_ptr(rbp, -88)));
+        Emit(a.movdqu(xmm2, xmmword_ptr(rbp, -104)));
+        Emit(a.movdqu(xmm3, xmmword_ptr(rbp, -120)));
+        Emit(a.movdqu(xmm4, xmmword_ptr(rbp, -136)));
+        Emit(a.movdqu(xmm5, xmmword_ptr(rbp, -152)));
+        Emit(a.movdqu(xmm6, xmmword_ptr(rbp, -168)));
+        Emit(a.movdqu(xmm7, xmmword_ptr(rbp, -184)));
         Emit(a.mov(rsp, rbp));
         Emit(a.pop(rbp));
         Emit(a.jmp(r11));
@@ -134,20 +195,55 @@ private:
     bool ok = true;
 };
 
-void* MakeResolverStub(GlobalContext& context, FunctionRecord& record)
+void* MakeResolverStub(GlobalContext& context, FunctionRecord& record, std::vector<int32_t> gcSlots)
 {
+    auto symbol = context.GetRuntimeBindings().Resolve("CJ_MCC_C2NStub");
+    const auto* c2nStub = std::get_if<void*>(&symbol);
+    if (!c2nStub || !*c2nStub) {
+        return nullptr;
+    }
     auto& runtime = context.GetRuntime();
     CodeHolder code;
     if (code.init(runtime.environment()) != kErrorOk) {
         return nullptr;
     }
     Assembler assembler(&code);
-    const bool ok = ResolverStubEmitter(assembler).Emit(context, record);
-    void* stub = nullptr;
-    if (!ok || runtime.add(&stub, &code) != kErrorOk) {
+    uint32_t safepoint = 0;
+    if (assembler.embedUInt32(0) != kErrorOk ||
+        !ResolverStubEmitter(assembler).Emit(context, record, *c2nStub, safepoint) ||
+        assembler.offset() <= 4 || assembler.offset() - 4 > UINT32_MAX) {
         return nullptr;
     }
-    return stub;
+    const auto codeSize = static_cast<uint32_t>(assembler.offset() - 4);
+    JitMetadataBuilder metadata(context.IsStackGrowthEnabled());
+    metadata.RecordFrame(192, {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX});
+    metadata.RecordSafepoint(safepoint, 0, std::move(gcSlots), 0, {}, 0, {});
+    auto provisional = metadata.Build(0x20000000, 0x10000000, codeSize);
+    const auto* layout = std::get_if<std::pair<std::vector<uint8_t>, std::array<uint8_t, 4>>>(&provisional);
+    if (!layout || assembler.align(AlignMode::kData, 4) != kErrorOk) {
+        return nullptr;
+    }
+    const auto metadataOffset = assembler.offset();
+    if (assembler.embed(layout->first.data(), layout->first.size()) != kErrorOk) {
+        return nullptr;
+    }
+    void* allocation = nullptr;
+    if (runtime.add(&allocation, &code) != kErrorOk) {
+        return nullptr;
+    }
+    const auto base = reinterpret_cast<CodeAddress>(allocation);
+    auto finalMetadata = metadata.Build(base + metadataOffset, base + 4, codeSize);
+    const auto* published = std::get_if<std::pair<std::vector<uint8_t>, std::array<uint8_t, 4>>>(&finalMetadata);
+    JitAllocator::Span span;
+    auto* allocator = runtime.allocator();
+    if (!published || published->first.size() != layout->first.size() ||
+        allocator->query(span, allocation) != kErrorOk ||
+        allocator->write(span, metadataOffset, published->first.data(), published->first.size()) != kErrorOk ||
+        allocator->write(span, 0, published->second.data(), published->second.size()) != kErrorOk) {
+        runtime.release(allocation);
+        return nullptr;
+    }
+    return allocation;
 }
 } // namespace
 
@@ -158,8 +254,8 @@ CodeAddress CompileFunctionStub::Compile(GlobalContext& context, const CHIR::Fun
     (void)function;
     return 0;
 #else
-    size_t stackArguments = 0;
-    if (!function || !SupportedSignature(*function, stackArguments)) {
+    std::vector<int32_t> gcSlots;
+    if (!function || !SupportedSignature(*function, gcSlots)) {
         return 0;
     }
     auto& record = context.GetFunctionRegistry().GetOrCreate(*function);
@@ -167,34 +263,16 @@ CodeAddress CompileFunctionStub::Compile(GlobalContext& context, const CHIR::Fun
         return record.GetEntryStub();
     }
 
-    void* resolverStub = MakeResolverStub(context, record);
-    if (!resolverStub) {
+    void* allocation = MakeResolverStub(context, record, std::move(gcSlots));
+    if (!allocation) {
         return 0;
     }
-    auto& runtime = context.GetRuntime();
-    CodeHolder code;
-    if (code.init(runtime.environment()) != kErrorOk) {
-        runtime.release(resolverStub);
+    const auto entry = reinterpret_cast<CodeAddress>(allocation) + 4;
+    if (!record.Initialize(entry)) {
+        context.GetRuntime().release(allocation);
         return 0;
     }
-    Assembler assembler(&code);
-    const auto targetAddressRegister = r11;
-    if (assembler.long_().mov(targetAddressRegister, reinterpret_cast<uintptr_t>(resolverStub)) != kErrorOk ||
-        assembler.jmp(targetAddressRegister) != kErrorOk) {
-        runtime.release(resolverStub);
-        return 0;
-    }
-    void* entry = nullptr;
-    if (runtime.add(&entry, &code) != kErrorOk) {
-        runtime.release(resolverStub);
-        return 0;
-    }
-    if (!record.Initialize(reinterpret_cast<CodeAddress>(entry))) {
-        runtime.release(entry);
-        runtime.release(resolverStub);
-        return 0;
-    }
-    return reinterpret_cast<CodeAddress>(entry);
+    return entry;
 #endif
 }
 } // namespace Cangjie::JIT::X86_64

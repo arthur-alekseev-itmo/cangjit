@@ -13,6 +13,7 @@
 #include "../../Utils/MemoryUtils.h"
 #include "../../Utils/RegisterUtils.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
+#include "cangjie/CHIR/IR/Expression/Terminator.h"
 #include "cangjie/CHIR/IR/Type/Type.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
 
@@ -20,7 +21,7 @@ namespace Cangjie::JIT::X86_64 {
 namespace {
 namespace x86 = asmjit::x86;
 
-const CHIR::Function* ValidateCall(FunctionContext& context, const CHIR::Apply& expression)
+const CHIR::Function* ValidateCall(FunctionContext& context, const CHIR::ApplyBase& expression)
 {
     const auto* calleeValue = expression.GetCallee();
     if (!calleeValue || !calleeValue->IsFunc()) {
@@ -42,14 +43,14 @@ const CHIR::Function* ValidateCall(FunctionContext& context, const CHIR::Apply& 
         context.Fail(JitFailureKind::UnsupportedReturnType);
         return nullptr;
     }
-    if (expression.GetNumOfOperands() != callee->GetParams().size() + 1) {
+    if (expression.GetSuccessorIndex(0) != callee->GetParams().size() + 1) {
         context.Fail(JitFailureKind::UnsupportedCall);
         return nullptr;
     }
     return callee;
 }
 
-bool ValidateArguments(FunctionContext& context, const CHIR::Apply& expression, const CHIR::Function& callee)
+bool ValidateArguments(FunctionContext& context, const CHIR::ApplyBase& expression, const CHIR::Function& callee)
 {
     const auto& parameters = callee.GetParams();
     for (size_t i = 0; i < parameters.size(); ++i) {
@@ -81,7 +82,7 @@ CodeAddress ResolveAddress(FunctionContext& context, const CHIR::Function& calle
     return target;
 }
 
-bool PlaceArguments(FunctionContext& context, const CHIR::Apply& expression, const CHIR::Function& callee,
+bool PlaceArguments(FunctionContext& context, const CHIR::ApplyBase& expression, const CHIR::Function& callee,
     const ParameterPlacement& placement)
 {
     MemoryUtils::ReserveStack(context, placement.stackSize);
@@ -118,13 +119,18 @@ bool PlaceArguments(FunctionContext& context, const CHIR::Apply& expression, con
     return true;
 }
 
-void EmitCall(FunctionContext& context, const CHIR::Apply& expression, const CHIR::Function& callee,
-    CodeAddress target, uint32_t stackSize)
+void EmitCall(FunctionContext& context, const CHIR::ApplyBase& expression, const CHIR::Function& callee,
+    CodeAddress target, uint32_t stackSize, const CHIR::Block* normal, const CHIR::Block* unwind)
 {
     auto& assembler = context.GetAssembler();
     const auto instructionOffset = assembler.offset();
     assembler.long_().mov(x86::r11, asmjit::imm(target));
+    const auto callStart = assembler.offset();
     assembler.call(x86::r11);
+    const auto callEnd = assembler.offset();
+    if (!context.RecordSafepoint(expression)) {
+        return;
+    }
     auto& record = context.GetGlobalContext().GetFunctionRegistry().GetOrCreate(callee);
     if (target == record.GetEntryStub()) {
         if (assembler.offset() - instructionOffset != 13) {
@@ -138,10 +144,14 @@ void EmitCall(FunctionContext& context, const CHIR::Apply& expression, const CHI
     if (!returnType->IsUnit() && !returnType->IsNothing() && !returnType->IsVoid()) {
         MemoryUtils::StoreValue(context, expression.GetResult(), x86::rax);
     }
+    if (normal && unwind && !context.GetFailure()) {
+        assembler.jmp(context.GetBlockLabel(normal));
+        context.EmitExceptionLanding(*unwind, callStart, callEnd);
+    }
 }
-} // namespace
 
-void CompileApply::Compile(FunctionContext& context, const CHIR::Apply& expression)
+void CompileCall(FunctionContext& context, const CHIR::ApplyBase& expression,
+    const CHIR::Block* normal, const CHIR::Block* unwind)
 {
     const auto* callee = ValidateCall(context, expression);
     if (!callee) {
@@ -159,6 +169,21 @@ void CompileApply::Compile(FunctionContext& context, const CHIR::Apply& expressi
     if (!target || !PlaceArguments(context, expression, *callee, *placements)) {
         return;
     }
-    EmitCall(context, expression, *callee, target, placements->stackSize);
+    EmitCall(context, expression, *callee, target, placements->stackSize, normal, unwind);
+}
+} // namespace
+
+void CompileApply::Compile(FunctionContext& context, const CHIR::Apply& expression)
+{
+    CompileCall(context, expression, nullptr, nullptr);
+}
+
+void CompileApply::Compile(FunctionContext& context, const CHIR::TryApply& expression)
+{
+    if (!expression.GetSuccessBlock() || !expression.GetErrorBlock()) {
+        context.Fail(JitFailureKind::MissingBranchDestination);
+        return;
+    }
+    CompileCall(context, expression, expression.GetSuccessBlock(), expression.GetErrorBlock());
 }
 } // namespace Cangjie::JIT::X86_64

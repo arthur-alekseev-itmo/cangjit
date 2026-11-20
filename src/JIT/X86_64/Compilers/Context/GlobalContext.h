@@ -9,6 +9,7 @@
 
 #include <asmjit/core.h>
 
+#include "../../JitRuntimeBindings.h"
 #include "../../LazyCalls/FunctionRegistry.h"
 #include "../../LazyCalls/FunctionResolver.h"
 #include "../../LazyCalls/LazyCallSiteRegistry.h"
@@ -17,6 +18,32 @@ namespace Cangjie::JIT::X86_64 {
 class GlobalContext final {
 public:
     GlobalContext() noexcept : allocatorParams(MakeAllocatorParams()), runtime(&allocatorParams) {}
+    ~GlobalContext()
+    {
+        runtimeBindings.Shutdown();
+    }
+
+    BindingResult ConfigureRuntime(const RuntimeConfig& config)
+    {
+        const bool previousStackGrowth = stackGrowthEnabled;
+        stackGrowthEnabled = std::get<4>(config);
+        auto result = runtimeBindings.Initialize(config);
+        if (!result.empty()) {
+            stackGrowthEnabled = previousStackGrowth;
+        }
+        return result;
+    }
+
+    JitRuntimeBindings& GetRuntimeBindings() noexcept
+    {
+        return runtimeBindings;
+    }
+
+    bool IsStackGrowthEnabled() const noexcept
+    {
+        return stackGrowthEnabled;
+    }
+
 
     asmjit::JitRuntime& GetRuntime() noexcept
     {
@@ -51,6 +78,8 @@ private:
     FunctionRegistry functionRegistry;
     LazyCallSiteRegistry lazyCallSites;
     FunctionResolver functionResolver;
+    JitRuntimeBindings runtimeBindings;
+    bool stackGrowthEnabled = false;
 };
 } // namespace Cangjie::JIT::X86_64
 
