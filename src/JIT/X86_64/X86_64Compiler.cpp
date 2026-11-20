@@ -38,6 +38,16 @@ void X86_64Compiler::Compile(const CHIR::Package& package, std::ostream& output)
             output.setstate(std::ios::badbit);
             return;
         }
+        // The native entry runs package initializers before user.main. Do not
+        // silently skip source-level initialization with observable effects.
+        for (const auto* global : package.GetGlobalVars()) {
+            if (global && !global->IsImportedVar() && !global->TestAttr(CHIR::Attribute::COMPILER_ADD) &&
+                global->GetInitFunc()) {
+                std::cerr << "JIT: package-local global initialization is not supported\n";
+                output.setstate(std::ios::badbit);
+                return;
+            }
+        }
         if (!runtimeConfigured) {
             const char* home = std::getenv("CANGJIE_HOME");
             if (!home || !*home) {

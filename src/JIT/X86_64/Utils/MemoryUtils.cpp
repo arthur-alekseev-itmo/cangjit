@@ -15,7 +15,6 @@
 #include "../Compilers/Context/FunctionContext.h"
 #include "../Compilers/Context/GlobalContext.h"
 #include "../Location.h"
-#include "cangjie/JIT/JitSymbols.h"
 #include "cangjie/CHIR/IR/Type/Type.h"
 #include "cangjie/CHIR/IR/Value/LiteralValue.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
@@ -118,21 +117,22 @@ bool MemoryUtils::LoadValue(FunctionContext& context, const CHIR::Value* value, 
         return context.GetError() == asmjit::kErrorOk;
     }
     if (value->IsGlobalVar()) {
-        if (value->IsImportedVar() &&
-            !context.GetGlobalContext().GetRuntimeBindings()
+        if (!value->IsImportedVar()) {
+            context.Fail(JitFailureKind::UnsupportedPackageGlobal);
+            return false;
+        }
+        if (!context.GetGlobalContext().GetRuntimeBindings()
                 .EnsureStandardPackage(static_cast<const CHIR::GlobalVar*>(value)->GetPackageName()).empty()) {
             context.Fail(JitFailureKind::UnresolvedSymbol);
             return false;
         }
-        const auto name = value->IsImportedVar() ? value->GetIdentifierWithoutPrefix() :
-            JitGlobalSlotName(value->GetIdentifierWithoutPrefix());
-        auto resolved = context.GetGlobalContext().GetRuntimeBindings().Resolve(name);
+        auto resolved = context.GetGlobalContext().GetRuntimeBindings().Resolve(value->GetIdentifierWithoutPrefix());
         const auto* symbol = std::get_if<void*>(&resolved);
         if (!symbol || !*symbol) {
             context.Fail(JitFailureKind::UnresolvedSymbol);
             return false;
         }
-        const auto address = value->IsImportedVar() ? *symbol : *static_cast<void* const*>(*symbol);
+        const auto address = *symbol;
         if (!address) {
             context.Fail(JitFailureKind::UnresolvedSymbol);
             return false;
