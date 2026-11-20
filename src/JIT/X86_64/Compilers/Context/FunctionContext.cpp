@@ -20,10 +20,38 @@
 
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Type/ClassDef.h"
+#include "cangjie/CHIR/IR/Type/ExtendDef.h"
 #include "cangjie/Mangle/CHIRTypeManglingUtils.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
 
 namespace Cangjie::JIT::X86_64 {
+namespace {
+bool FindGenericPath(const CHIR::Type& type, const CHIR::Type& generic, std::vector<size_t>& path)
+{
+    if (&type == &generic) {
+        return true;
+    }
+    const CHIR::Type* base = &type;
+    while (base->IsRef()) {
+        base = static_cast<const CHIR::RefType*>(base)->GetBaseType();
+        if (!base) {
+            return false;
+        }
+    }
+    const auto args = base->GetTypeArgs();
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (!args[i]) {
+            continue;
+        }
+        path.push_back(i);
+        if (FindGenericPath(*args[i], generic, path)) {
+            return true;
+        }
+        path.pop_back();
+    }
+    return false;
+}
+}
 
 FunctionContext::FunctionContext(GlobalContext& globalContext, const CHIR::Function* function,
     ValueNumeration valueNumeration, InterferenceGraph interferenceGraph, RegisterAllocation registerAllocation) noexcept
@@ -99,6 +127,19 @@ bool FunctionContext::LoadTypeInfo(const CHIR::Type& input, const asmjit::x86::G
             return false;
         }
     }
+    const auto* parent = function->GetParentCustomTypeDef();
+    const auto* parentType = parent
+        ? (parent->IsExtend() ? static_cast<const CHIR::ExtendDef*>(parent)->GetExtendedType() : parent->GetType())
+        : nullptr;
+    if (parent && !parent->GetGenericTypeParams().empty() && type == parentType) {
+        const auto offset = GetHiddenTypeInfoOffset(function->GetGenericTypeParams().size());
+        if (!offset) {
+            Fail(JitFailureKind::UnsupportedCall);
+            return false;
+        }
+        assembler.mov(target, asmjit::x86::qword_ptr(asmjit::x86::rbp, *offset));
+        return true;
+    }
     if (type->IsGeneric()) {
         const auto& generics = function->GetGenericTypeParams();
         for (size_t i = 0; i < generics.size(); ++i) {
@@ -108,6 +149,37 @@ bool FunctionContext::LoadTypeInfo(const CHIR::Type& input, const asmjit::x86::G
                     break;
                 }
                 assembler.mov(target, asmjit::x86::qword_ptr(asmjit::x86::rbp, *offset));
+                return true;
+            }
+        }
+        if (parent) {
+            const auto& outerGenerics = parent->GetGenericTypeParams();
+            for (size_t i = 0; i < outerGenerics.size(); ++i) {
+                if (outerGenerics[i] != type) {
+                    continue;
+                }
+                std::vector<size_t> path;
+                if (parent->IsExtend()) {
+                    if (!parentType || !FindGenericPath(*parentType, *type, path) || path.empty()) {
+                        break;
+                    }
+                } else {
+                    path.push_back(i);
+                }
+                const auto offset = GetHiddenTypeInfoOffset(generics.size());
+                if (!offset) {
+                    break;
+                }
+                assembler.mov(target, asmjit::x86::qword_ptr(asmjit::x86::rbp, *offset));
+                for (const auto index : path) {
+                    if (index > static_cast<size_t>(std::numeric_limits<int32_t>::max()) / sizeof(uint64_t)) {
+                        Fail(JitFailureKind::UnsupportedCall);
+                        return false;
+                    }
+                    // x86-64 native TypeInfo.typeArgs.
+                    assembler.mov(target, asmjit::x86::qword_ptr(target, 48));
+                    assembler.mov(target, asmjit::x86::qword_ptr(target, static_cast<int32_t>(index * sizeof(uint64_t))));
+                }
                 return true;
             }
         }
