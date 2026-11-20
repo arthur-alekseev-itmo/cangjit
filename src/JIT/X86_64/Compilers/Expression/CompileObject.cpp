@@ -17,7 +17,6 @@
 #include "../../Utils/MemoryUtils.h"
 #include "cangjie/CHIR/IR/Type/ClassDef.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
-#include "cangjie/Mangle/CHIRTypeManglingUtils.h"
 #include "cangjie/Utils/ConstantsUtils.h"
 
 namespace Cangjie::JIT::X86_64 {
@@ -82,23 +81,18 @@ void CompileAllocation(FunctionContext& context, const CHIR::AllocateBase& expre
         return;
     }
 
-    auto* lookupAddress = Resolve(context, "CJ_MCC_GetTypeByMangledName");
+    const bool dynamic = type->IsGenericRelated();
+    auto* typeInfo = dynamic ? nullptr : context.GetConcreteTypeInfo(*type);
     auto* sizeAddress = Resolve(context, "_ZNK12MapleRuntime8TypeInfo15GetInstanceSizeEv");
     const std::string_view allocationSymbol = AllocationSymbol(*def, local);
     auto* allocateAddress = Resolve(context, allocationSymbol.data());
-    if (!lookupAddress || !sizeAddress || !allocateAddress) {
-        return;
-    }
-    using Lookup = void* (*)(const char*);
-    using GetSize = uint32_t (*)(const void*);
-    const auto name = CHIR::GetTypeQualifiedName(*type, true);
-    auto* typeInfo = reinterpret_cast<Lookup>(lookupAddress)(name.c_str());
-    if (!typeInfo) {
+    if ((!dynamic && !typeInfo) || !sizeAddress || !allocateAddress) {
         context.Fail(JitFailureKind::UnresolvedSymbol, expression.GetExprKind());
         return;
     }
+    using GetSize = uint32_t (*)(const void*);
     // Runtime expects the eight-byte header plus the payload rounded to eight bytes.
-    const uint64_t payload = reinterpret_cast<GetSize>(sizeAddress)(typeInfo);
+    const uint64_t payload = dynamic ? 0 : reinterpret_cast<GetSize>(sizeAddress)(typeInfo);
     const bool pinned = allocationSymbol == "CJ_MCC_NewPinnedObject";
     const uint64_t size = ((payload + 7) & ~uint64_t{7}) + 8;
     if (size > std::numeric_limits<uint32_t>::max()) {
@@ -107,6 +101,10 @@ void CompileAllocation(FunctionContext& context, const CHIR::AllocateBase& expre
     }
     std::vector<CodeAddress> methods;
     if (type->IsAutoEnv()) {
+        if (dynamic) {
+            context.Fail(JitFailureKind::UnsupportedAllocation, expression.GetExprKind());
+            return;
+        }
         const auto functions = def->GetMethods();
         if (functions.size() > payload / sizeof(uint64_t) ||
             functions.size() > (std::numeric_limits<int32_t>::max() - 8) / sizeof(uint64_t)) {
@@ -125,8 +123,24 @@ void CompileAllocation(FunctionContext& context, const CHIR::AllocateBase& expre
     }
 
     auto& assembler = context.GetAssembler();
-    assembler.mov(x86::rdi, asmjit::imm(reinterpret_cast<uintptr_t>(typeInfo)));
-    assembler.mov(x86::esi, static_cast<uint32_t>(size));
+    if (dynamic) {
+        if (!context.LoadTypeInfo(*type, x86::rax)) {
+            return;
+        }
+        MemoryUtils::ReserveStack(context, 16);
+        assembler.mov(x86::qword_ptr(x86::rsp), x86::rax);
+        assembler.mov(x86::rdi, x86::rax);
+        assembler.long_().mov(x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(sizeAddress)));
+        assembler.call(x86::r11);
+        assembler.mov(x86::esi, x86::eax);
+        assembler.add(x86::rsi, 7);
+        assembler.and_(x86::rsi, -8);
+        assembler.add(x86::rsi, 8);
+        assembler.mov(x86::rdi, x86::qword_ptr(x86::rsp));
+    } else {
+        assembler.mov(x86::rdi, asmjit::imm(reinterpret_cast<uintptr_t>(typeInfo)));
+        assembler.mov(x86::esi, static_cast<uint32_t>(size));
+    }
     if (pinned) {
         assembler.xor_(x86::edx, x86::edx);
     }
@@ -134,7 +148,13 @@ void CompileAllocation(FunctionContext& context, const CHIR::AllocateBase& expre
     const auto callStart = assembler.offset();
     assembler.call(x86::r11);
     const auto callEnd = assembler.offset();
-    if (!context.RecordSafepoint(expression) || !MemoryUtils::StoreValue(context, result, x86::rax)) {
+    if (!context.RecordSafepoint(expression)) {
+        return;
+    }
+    if (dynamic) {
+        MemoryUtils::ReleaseStack(context, 16);
+    }
+    if (!MemoryUtils::StoreValue(context, result, x86::rax)) {
         return;
     }
     for (size_t i = 0; i < methods.size(); ++i) {

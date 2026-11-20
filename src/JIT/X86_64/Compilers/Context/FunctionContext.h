@@ -41,6 +41,7 @@ public:
     asmjit::x86::Assembler& GetAssembler() noexcept;
     JitMetadataBuilder& GetMetadataBuilder() noexcept;
     std::optional<int32_t> GetHiddenTypeInfoOffset(size_t index) const noexcept;
+    void* GetConcreteTypeInfo(const CHIR::Type& type);
     bool LoadTypeInfo(const CHIR::Type& type, const asmjit::x86::Gp& target);
     bool RecordSafepoint(const CHIR::Expression& expression, const CHIR::Value* temporaryRoot = nullptr);
     bool EmitExceptionLanding(const CHIR::Block& block, size_t callStart, size_t callEnd);

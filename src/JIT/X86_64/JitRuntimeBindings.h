@@ -35,8 +35,9 @@ public:
     BindingResult Initialize(const RuntimeConfig& config);
     BindingResult EnsureStandardPackage(std::string_view package);
     SymbolResult Resolve(SymbolName name);
-    // The host must first quiesce generated code and release all objects and
-    // tasks referencing the loaded libraries. Calls are externally serialized.
+    // The host must first quiesce generated code and tasks. For a borrowed
+    // runtime it must also ensure no heap objects or GC work can reference
+    // the loaded libraries. Calls are externally serialized.
     void Shutdown();
 
 private:

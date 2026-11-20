@@ -241,6 +241,11 @@ std::optional<int32_t> FunctionContext::GetHiddenTypeInfoOffset(size_t index) co
     return StackFrameUtils::GetSlotOffset(hiddenTypeInfoBase + index, registerAllocation.GetStackSlotCount());
 }
 
+void* FunctionContext::GetConcreteTypeInfo(const CHIR::Type& type)
+{
+    return ResolveConcreteTypeInfo(*this, type);
+}
+
 bool FunctionContext::LoadTypeInfo(const CHIR::Type& input, const asmjit::x86::Gp& target)
 {
     const CHIR::Type* type = &input;
@@ -360,7 +365,7 @@ bool FunctionContext::LoadTypeInfo(const CHIR::Type& input, const asmjit::x86::G
         }
         return true;
     }
-    auto* info = ResolveConcreteTypeInfo(*this, *type);
+    auto* info = GetConcreteTypeInfo(*type);
     if (!info) {
         Fail(JitFailureKind::UnresolvedSymbol);
         return false;

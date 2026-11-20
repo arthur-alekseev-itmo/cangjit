@@ -163,14 +163,6 @@ void JitRuntimeBindings::Shutdown()
         return;
     }
     initialized = false;
-    auto unload = symbols.find("UnloadCJLibrary");
-    while (!libraries.empty()) {
-        if (unload == symbols.end() || reinterpret_cast<LibraryOperation>(unload->second)(libraries.back().c_str()) != 0) {
-            std::fprintf(stderr, "JIT runtime bindings: failed to unload %s\n", libraries.back().c_str());
-            return; // Retain the runtime and remaining handles rather than invalidate live code.
-        }
-        libraries.pop_back();
-    }
     if (ownsRuntime) {
         auto fini = symbols.find("FiniCJRuntime");
         if (fini == symbols.end() || reinterpret_cast<FiniRuntime>(fini->second)() != 0) {
@@ -178,6 +170,16 @@ void JitRuntimeBindings::Shutdown()
             return; // Do not unload a runtime that could still be active.
         }
         ownsRuntime = false;
+    }
+    // Keep library TypeInfos mapped until the owned runtime has stopped its
+    // collector. Unreachable objects can still be visited during shutdown.
+    auto unload = symbols.find("UnloadCJLibrary");
+    while (!libraries.empty()) {
+        if (unload == symbols.end() || reinterpret_cast<LibraryOperation>(unload->second)(libraries.back().c_str()) != 0) {
+            std::fprintf(stderr, "JIT runtime bindings: failed to unload %s\n", libraries.back().c_str());
+            return; // Retain the runtime and remaining handles rather than invalidate live code.
+        }
+        libraries.pop_back();
     }
     symbols.clear();
     if (dlclose(runtime) == 0) {
