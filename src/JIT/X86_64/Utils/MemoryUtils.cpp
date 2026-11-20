@@ -300,6 +300,53 @@ bool MemoryUtils::PlaceTypeInfo(
     return true;
 }
 
+std::optional<uint32_t> MemoryUtils::StageTypeInfos(
+    FunctionContext& context, const std::vector<const CHIR::Type*>& types)
+{
+    if (types.size() > (static_cast<size_t>(std::numeric_limits<int32_t>::max()) - 15) / sizeof(uint64_t)) {
+        context.Fail(JitFailureKind::UnsupportedCallingConvention);
+        return std::nullopt;
+    }
+    const auto size = static_cast<uint32_t>((types.size() * sizeof(uint64_t) + 15) & ~size_t{15});
+    ReserveStack(context, size);
+    for (size_t i = 0; i < types.size(); ++i) {
+        if (!types[i] || !context.LoadTypeInfo(*types[i], asmjit::x86::rax)) {
+            context.Fail(JitFailureKind::UnsupportedCall);
+            return std::nullopt;
+        }
+        context.GetAssembler().mov(
+            asmjit::x86::qword_ptr(asmjit::x86::rsp, static_cast<int32_t>(i * sizeof(uint64_t))),
+            asmjit::x86::rax);
+    }
+    return size;
+}
+
+bool MemoryUtils::PlaceStagedTypeInfo(
+    FunctionContext& context, const Location& location, uint32_t stackSize, int32_t scratchOffset)
+{
+    auto& assembler = context.GetAssembler();
+    if (const auto* reg = location.AsRegister()) {
+        const auto target = RegisterUtils::Get64BitRegister(reg->type);
+        if (!target) {
+            context.Fail(JitFailureKind::UnsupportedCallingConvention);
+            return false;
+        }
+        assembler.mov(*target, asmjit::x86::qword_ptr(asmjit::x86::rsp, scratchOffset));
+        return true;
+    }
+    const auto* stack = location.AsIncomingStack();
+    if (!stack || stack->index >= stackSize / sizeof(uint64_t) ||
+        stack->index > static_cast<size_t>(std::numeric_limits<int32_t>::max()) / sizeof(uint64_t)) {
+        context.Fail(JitFailureKind::UnsupportedCallingConvention);
+        return false;
+    }
+    assembler.mov(asmjit::x86::rax, asmjit::x86::qword_ptr(asmjit::x86::rsp, scratchOffset));
+    assembler.mov(
+        asmjit::x86::qword_ptr(asmjit::x86::rsp, static_cast<int32_t>(stack->index * sizeof(uint64_t))),
+        asmjit::x86::rax);
+    return true;
+}
+
 bool MemoryUtils::ZeroStackValueAndLoadAddress(
     FunctionContext& context, const CHIR::Value* value, const asmjit::x86::Gp& target)
 {

@@ -11,6 +11,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
+#include <vector>
 
 namespace Cangjie::CHIR {
 class Type;
@@ -36,6 +38,10 @@ public:
         uint32_t stackSize);
     static bool PlaceTypeInfo(FunctionContext& context, const CHIR::Type* type, const Location& location,
         uint32_t stackSize);
+    static std::optional<uint32_t> StageTypeInfos(
+        FunctionContext& context, const std::vector<const CHIR::Type*>& types);
+    static bool PlaceStagedTypeInfo(
+        FunctionContext& context, const Location& location, uint32_t stackSize, int32_t scratchOffset);
     static bool ZeroStackValueAndLoadAddress(
         FunctionContext& context, const CHIR::Value* value, const asmjit::x86::Gp& target);
 

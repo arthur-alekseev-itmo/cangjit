@@ -136,6 +136,91 @@ bool FunctionContext::LoadTypeInfo(const CHIR::Type& input, const asmjit::x86::G
         assembler.shr(target, 16);
         return true;
     }
+    if (type->IsGenericRelated()) {
+        auto arguments = type->GetTypeArgs();
+        std::string templateName;
+        if (type->IsClass() || type->IsStruct() || type->IsEnum()) {
+            const auto* custom = &static_cast<const CHIR::CustomType&>(*type);
+            if (custom->IsAutoEnvBase()) {
+                auto& builder = globalContext.GetCHIRBuilder();
+                if (custom->IsAutoEnvInstBase()) {
+                    custom = const_cast<CHIR::ClassType*>(static_cast<const CHIR::ClassType*>(custom))
+                                 ->GetSuperClassTy(&builder);
+                }
+                if (!custom || !custom->IsAutoEnvGenericBase()) {
+                    Fail(JitFailureKind::UnsupportedCall);
+                    return false;
+                }
+                auto args = custom->GetGenericArgs();
+                if (args.empty()) {
+                    Fail(JitFailureKind::UnsupportedCall);
+                    return false;
+                }
+                std::vector<CHIR::Type*> parameters(args.begin(), args.end() - 1);
+                arguments = {builder.GetType<CHIR::FuncType>(parameters, args.back())};
+                templateName = "Closure.tt";
+            } else {
+                const auto* def = custom->GetCustomTypeDef();
+                if (!def || !globalContext.GetRuntimeBindings().EnsureStandardPackage(def->GetPackageName()).empty()) {
+                    Fail(JitFailureKind::UnresolvedSymbol);
+                    return false;
+                }
+                const auto& package =
+                    def->GetGenericDecl() ? def->GetGenericDecl()->GetPackageName() : def->GetPackageName();
+                templateName = package + ":" + CHIR::GetCustomTypeIdentifier(*custom) + ".tt";
+            }
+        } else if (type->IsTuple()) {
+            templateName = "Tuple.tt";
+        } else if (type->IsRawArray()) {
+            templateName = "RawArray.tt";
+        } else if (type->IsCPointer()) {
+            templateName = "CPointer.tt";
+        } else if (type->IsBox()) {
+            templateName = "Box.tt";
+        } else if (type->IsFunc()) {
+            templateName = "CFunc.tt";
+            if (!arguments.empty()) {
+                std::rotate(arguments.begin(), arguments.end() - 1, arguments.end());
+            }
+        } else {
+            Fail(JitFailureKind::UnsupportedCall);
+            return false;
+        }
+        if (arguments.empty() || arguments.size() > (static_cast<size_t>(std::numeric_limits<int32_t>::max()) - 15) /
+                sizeof(uint64_t)) {
+            Fail(JitFailureKind::UnsupportedCall);
+            return false;
+        }
+        auto templateSymbol = globalContext.GetRuntimeBindings().Resolve(templateName);
+        auto helperSymbol = globalContext.GetRuntimeBindings().Resolve("CJ_MCC_GetOrCreateTypeInfo");
+        const auto* typeTemplate = std::get_if<void*>(&templateSymbol);
+        const auto* helper = std::get_if<void*>(&helperSymbol);
+        if (!typeTemplate || !*typeTemplate || !helper || !*helper) {
+            Fail(JitFailureKind::UnresolvedSymbol);
+            return false;
+        }
+        const auto stackSize = static_cast<uint32_t>((arguments.size() * sizeof(uint64_t) + 15) & ~size_t{15});
+        MemoryUtils::ReserveStack(*this, stackSize);
+        for (size_t i = 0; i < arguments.size(); ++i) {
+            if (!arguments[i] || !LoadTypeInfo(*arguments[i], asmjit::x86::rax)) {
+                return false;
+            }
+            assembler.mov(asmjit::x86::qword_ptr(asmjit::x86::rsp, static_cast<int32_t>(i * sizeof(uint64_t))),
+                asmjit::x86::rax);
+        }
+        assembler.long_().mov(asmjit::x86::rdi, asmjit::imm(reinterpret_cast<uintptr_t>(*typeTemplate)));
+        assembler.mov(asmjit::x86::esi, static_cast<uint32_t>(arguments.size()));
+        assembler.mov(asmjit::x86::rdx, asmjit::x86::rsp);
+        assembler.long_().mov(asmjit::x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(*helper)));
+        // Native CodeGen emits llvm.cj.get.type.info as a nounwind, readonly
+        // intrinsic; its runtime helper is not a managed safepoint.
+        assembler.call(asmjit::x86::r11);
+        MemoryUtils::ReleaseStack(*this, stackSize);
+        if (target != asmjit::x86::rax) {
+            assembler.mov(target, asmjit::x86::rax);
+        }
+        return true;
+    }
     if (type->IsClass() || type->IsStruct() || type->IsEnum()) {
         const auto* def = static_cast<const CHIR::CustomType*>(type)->GetCustomTypeDef();
         if (!def || !globalContext.GetRuntimeBindings().EnsureStandardPackage(def->GetPackageName()).empty()) {

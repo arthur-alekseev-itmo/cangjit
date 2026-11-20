@@ -17,6 +17,9 @@
 #include "cangjie/CHIR/IR/Type/Type.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
 
+#include <algorithm>
+#include <limits>
+#include <vector>
 
 namespace Cangjie::JIT::X86_64 {
 namespace {
@@ -103,8 +106,37 @@ CodeAddress ResolveAddress(FunctionContext& context, const CHIR::Function& calle
 
 
 bool PlaceArguments(FunctionContext& context, const CHIR::ApplyBase& expression, const CHIR::Function& callee,
-    const ParameterPlacement& placement)
+    const ParameterPlacement& placement, uint32_t& scratchSize)
 {
+    const auto& typeArgs = expression.GetInstantiatedTypeArgs();
+    if (typeArgs.size() != placement.genericTypeInfoLocations.size()) {
+        context.Fail(JitFailureKind::UnsupportedCallingConvention);
+        return false;
+    }
+    const auto* outer = placement.outerTypeInfoLocation
+        ? expression.GetInstParentCustomTyOfCallee(context.GetGlobalContext().GetCHIRBuilder()) : nullptr;
+    const auto* thisType = placement.thisTypeInfoLocation ? expression.GetThisType() : nullptr;
+    const auto dynamicType = [](const CHIR::Type* type) {
+        return type && !type->IsGeneric() && !type->IsThis() && type->IsGenericRelated();
+    };
+    const bool needsScratch = std::any_of(typeArgs.begin(), typeArgs.end(), dynamicType) ||
+        dynamicType(outer) || dynamicType(thisType);
+    if (needsScratch) {
+        std::vector<const CHIR::Type*> types(typeArgs.begin(), typeArgs.end());
+        if (placement.outerTypeInfoLocation) {
+            types.push_back(outer);
+        }
+        if (placement.thisTypeInfoLocation) {
+            types.push_back(thisType);
+        }
+        const auto size = MemoryUtils::StageTypeInfos(context, types);
+        if (!size || placement.stackSize > static_cast<uint32_t>(std::numeric_limits<int32_t>::max()) ||
+            *size > static_cast<uint32_t>(std::numeric_limits<int32_t>::max()) - placement.stackSize) {
+            context.Fail(JitFailureKind::UnsupportedCallingConvention);
+            return false;
+        }
+        scratchSize = *size;
+    }
     MemoryUtils::ReserveStack(context, placement.stackSize);
     const auto& parameters = callee.GetParams();
     for (size_t i = 0; i < parameters.size(); ++i) {
@@ -131,24 +163,23 @@ bool PlaceArguments(FunctionContext& context, const CHIR::ApplyBase& expression,
             return false;
         }
     }
-    const auto& typeArgs = expression.GetInstantiatedTypeArgs();
-    if (typeArgs.size() != placement.genericTypeInfoLocations.size()) {
-        context.Fail(JitFailureKind::UnsupportedCallingConvention);
+    size_t typeIndex = 0;
+    const auto placeType = [&](const CHIR::Type* type, const Location& location) {
+        if (needsScratch) {
+            const auto offset = static_cast<int32_t>(placement.stackSize + typeIndex++ * sizeof(uint64_t));
+            return MemoryUtils::PlaceStagedTypeInfo(context, location, placement.stackSize, offset);
+        }
+        return MemoryUtils::PlaceTypeInfo(context, type, location, placement.stackSize);
+    };
+    for (size_t i = 0; i < typeArgs.size(); ++i) {
+        if (!placeType(typeArgs[i], placement.genericTypeInfoLocations[i])) {
+            return false;
+        }
+    }
+    if (placement.outerTypeInfoLocation && !placeType(outer, *placement.outerTypeInfoLocation)) {
         return false;
     }
-    for (size_t i = 0; i < typeArgs.size(); ++i) {
-        if (!MemoryUtils::PlaceTypeInfo(context, typeArgs[i], placement.genericTypeInfoLocations[i], placement.stackSize)) {
-            return false;
-        }
-    }
-    if (placement.outerTypeInfoLocation) {
-        const auto* outer = expression.GetInstParentCustomTyOfCallee(context.GetGlobalContext().GetCHIRBuilder());
-        if (!MemoryUtils::PlaceTypeInfo(context, outer, *placement.outerTypeInfoLocation, placement.stackSize)) {
-            return false;
-        }
-    }
-    if (placement.thisTypeInfoLocation &&
-        !MemoryUtils::PlaceTypeInfo(context, expression.GetThisType(), *placement.thisTypeInfoLocation, placement.stackSize)) {
+    if (placement.thisTypeInfoLocation && !placeType(thisType, *placement.thisTypeInfoLocation)) {
         return false;
     }
     const auto* returnType = callee.GetReturnType();
@@ -214,10 +245,11 @@ void CompileCall(FunctionContext& context, const CHIR::ApplyBase& expression,
         return;
     }
     const CodeAddress target = ResolveAddress(context, *callee);
-    if (!target || !PlaceArguments(context, expression, *callee, *placements)) {
+    uint32_t scratchSize = 0;
+    if (!target || !PlaceArguments(context, expression, *callee, *placements, scratchSize)) {
         return;
     }
-    EmitCall(context, expression, *callee, target, placements->stackSize, normal, unwind);
+    EmitCall(context, expression, *callee, target, placements->stackSize + scratchSize, normal, unwind);
 }
 } // namespace
 
