@@ -22,6 +22,7 @@
 #include "../../Utils/MemoryUtils.h"
 #include "../../Utils/RegisterUtils.h"
 #include "../../Utils/StackFrameUtils.h"
+#include "cangjie/Basic/UGTypeKind.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Expression/Terminator.h"
 #include "cangjie/CHIR/IR/Type/ClassDef.h"
@@ -162,19 +163,22 @@ void CompileInstanceOf(FunctionContext& context, const CHIR::InstanceOf& express
     const auto* objectType = object ? object->GetType() : nullptr;
     const auto* targetType = expression.GetType();
     const auto* result = expression.GetResult();
-    if (!objectType || !objectType->IsRef() || !targetType || !targetType->IsRef() ||
+    if (!objectType || !objectType->IsRef() || !targetType ||
         !result || !result->GetType() || !result->GetType()->IsBoolean()) {
         context.Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
         return;
     }
     const auto* objectClass = static_cast<const CHIR::RefType*>(objectType)->GetBaseType();
-    const auto* targetClass = static_cast<const CHIR::RefType*>(targetType)->GetBaseType();
-    if (!objectClass || !objectClass->IsClass() || !targetClass || !targetClass->IsClass()) {
+    const auto* targetBase = targetType->IsRef()
+        ? static_cast<const CHIR::RefType*>(targetType)->GetBaseType() : targetType;
+    if (!objectClass || !objectClass->IsClass() || !targetBase) {
         context.Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
         return;
     }
     auto* subtype = ResolveExceptionSymbol(context, "CJ_MCC_IsSubType");
-    if (!subtype || !context.LoadTypeInfo(*targetClass, asmjit::x86::rsi)) {
+    auto* tupleTest = objectClass->IsAny() ? ResolveExceptionSymbol(context, "CJ_MCC_IsTupleTypeOf") : nullptr;
+    if (!subtype || (objectClass->IsAny() && !tupleTest) ||
+        !context.LoadTypeInfo(*targetBase, asmjit::x86::rsi)) {
         return;
     }
     if (!MemoryUtils::LoadValue(context, object, asmjit::x86::rdi)) {
@@ -185,12 +189,31 @@ void CompileInstanceOf(FunctionContext& context, const CHIR::InstanceOf& express
     a.xor_(asmjit::x86::eax, asmjit::x86::eax);
     a.test(asmjit::x86::rdi, asmjit::x86::rdi);
     a.jz(done);
-    a.mov(asmjit::x86::rdi, asmjit::x86::qword_ptr(asmjit::x86::rdi));
+    a.mov(asmjit::x86::rax, asmjit::x86::qword_ptr(asmjit::x86::rdi));
     // The high 16 bits of an object header hold runtime state, not TypeInfo.
-    a.shl(asmjit::x86::rdi, 16);
-    a.shr(asmjit::x86::rdi, 16);
-    a.long_().mov(asmjit::x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(subtype)));
-    a.call(asmjit::x86::r11);
+    a.shl(asmjit::x86::rax, 16);
+    a.shr(asmjit::x86::rax, 16);
+    if (objectClass->IsAny()) {
+        const auto nonTuple = a.newLabel();
+        const auto tested = a.newLabel();
+        // x86-64 native TypeInfo.type is the byte after its name pointer.
+        a.cmp(asmjit::x86::byte_ptr(asmjit::x86::rax, 8), static_cast<uint8_t>(UG_TUPLE));
+        a.jne(nonTuple);
+        a.mov(asmjit::x86::rdx, asmjit::x86::rsi);
+        a.xor_(asmjit::x86::esi, asmjit::x86::esi);
+        a.long_().mov(asmjit::x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(tupleTest)));
+        a.call(asmjit::x86::r11);
+        a.jmp(tested);
+        a.bind(nonTuple);
+        a.mov(asmjit::x86::rdi, asmjit::x86::rax);
+        a.long_().mov(asmjit::x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(subtype)));
+        a.call(asmjit::x86::r11);
+        a.bind(tested);
+    } else {
+        a.mov(asmjit::x86::rdi, asmjit::x86::rax);
+        a.long_().mov(asmjit::x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(subtype)));
+        a.call(asmjit::x86::r11);
+    }
     a.movzx(asmjit::x86::eax, asmjit::x86::al);
     a.bind(done);
     MemoryUtils::StoreValue(context, result, asmjit::x86::rax);
