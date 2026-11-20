@@ -51,6 +51,130 @@ bool FindGenericPath(const CHIR::Type& type, const CHIR::Type& generic, std::vec
     }
     return false;
 }
+
+struct TypeTemplateInfo {
+    void* typeTemplate;
+    void* create;
+    std::vector<CHIR::Type*> arguments;
+};
+
+std::optional<TypeTemplateInfo> PrepareTypeTemplate(FunctionContext& context, const CHIR::Type& type)
+{
+    auto arguments = type.GetTypeArgs();
+    std::string name;
+    if (type.IsClass() || type.IsStruct() || type.IsEnum()) {
+        const auto* custom = &static_cast<const CHIR::CustomType&>(type);
+        if (custom->IsAutoEnvBase()) {
+            auto& builder = context.GetGlobalContext().GetCHIRBuilder();
+            if (custom->IsAutoEnvInstBase()) {
+                custom = const_cast<CHIR::ClassType*>(static_cast<const CHIR::ClassType*>(custom))
+                             ->GetSuperClassTy(&builder);
+            }
+            if (!custom || !custom->IsAutoEnvGenericBase()) {
+                context.Fail(JitFailureKind::UnsupportedCall);
+                return std::nullopt;
+            }
+            auto args = custom->GetGenericArgs();
+            if (args.empty()) {
+                context.Fail(JitFailureKind::UnsupportedCall);
+                return std::nullopt;
+            }
+            std::vector<CHIR::Type*> parameters(args.begin(), args.end() - 1);
+            arguments = {builder.GetType<CHIR::FuncType>(parameters, args.back())};
+            name = "Closure.tt";
+        } else {
+            const auto* def = custom->GetCustomTypeDef();
+            if (!def ||
+                !context.GetGlobalContext().GetRuntimeBindings().EnsureStandardPackage(def->GetPackageName()).empty()) {
+                context.Fail(JitFailureKind::UnresolvedSymbol);
+                return std::nullopt;
+            }
+            const auto& package =
+                def->GetGenericDecl() ? def->GetGenericDecl()->GetPackageName() : def->GetPackageName();
+            name = package + ":" + CHIR::GetCustomTypeIdentifier(*custom) + ".tt";
+        }
+    } else if (type.IsTuple()) {
+        name = "Tuple.tt";
+    } else if (type.IsRawArray()) {
+        name = "RawArray.tt";
+    } else if (type.IsCPointer()) {
+        name = "CPointer.tt";
+    } else if (type.IsBox()) {
+        name = "Box.tt";
+    } else if (type.IsFunc()) {
+        name = "CFunc.tt";
+        if (!arguments.empty()) {
+            std::rotate(arguments.begin(), arguments.end() - 1, arguments.end());
+        }
+    } else {
+        context.Fail(JitFailureKind::UnsupportedCall);
+        return std::nullopt;
+    }
+    if (arguments.empty() || arguments.size() > (static_cast<size_t>(std::numeric_limits<int32_t>::max()) - 15) /
+            sizeof(uint64_t)) {
+        context.Fail(JitFailureKind::UnsupportedCall);
+        return std::nullopt;
+    }
+    auto& bindings = context.GetGlobalContext().GetRuntimeBindings();
+    auto templateSymbol = bindings.Resolve(name);
+    auto helperSymbol = bindings.Resolve("CJ_MCC_GetOrCreateTypeInfo");
+    const auto* typeTemplate = std::get_if<void*>(&templateSymbol);
+    const auto* helper = std::get_if<void*>(&helperSymbol);
+    if (!typeTemplate || !*typeTemplate || !helper || !*helper) {
+        context.Fail(JitFailureKind::UnresolvedSymbol);
+        return std::nullopt;
+    }
+    return TypeTemplateInfo{*typeTemplate, *helper, std::move(arguments)};
+}
+
+void* ResolveConcreteTypeInfo(FunctionContext& context, const CHIR::Type& input)
+{
+    const CHIR::Type* type = &input;
+    while (type->IsRef()) {
+        type = static_cast<const CHIR::RefType*>(type)->GetBaseType();
+        if (!type) {
+            context.Fail(JitFailureKind::UnsupportedCall);
+            return nullptr;
+        }
+    }
+    const bool isCustom = type->IsClass() || type->IsStruct() || type->IsEnum();
+    const auto* custom = isCustom ? static_cast<const CHIR::CustomType*>(type) : nullptr;
+    if (custom && !custom->IsAutoEnvBase()) {
+        const auto* def = custom->GetCustomTypeDef();
+        if (!def || !context.GetGlobalContext().GetRuntimeBindings().EnsureStandardPackage(def->GetPackageName()).empty()) {
+            context.Fail(JitFailureKind::UnresolvedSymbol);
+            return nullptr;
+        }
+    }
+    if (!custom || !custom->IsAutoEnvBase()) {
+        auto symbol = context.GetGlobalContext().GetRuntimeBindings().Resolve("CJ_MCC_GetTypeByMangledName");
+        const auto* lookup = std::get_if<void*>(&symbol);
+        if (!lookup || !*lookup) {
+            context.Fail(JitFailureKind::UnresolvedSymbol);
+            return nullptr;
+        }
+        const auto name = CHIR::GetTypeQualifiedName(*type, true);
+        if (auto* found = reinterpret_cast<void* (*)(const char*)>(*lookup)(name.c_str())) {
+            return found;
+        }
+    }
+    auto prepared = PrepareTypeTemplate(context, *type);
+    if (!prepared) {
+        return nullptr;
+    }
+    std::vector<void*> infos;
+    infos.reserve(prepared->arguments.size());
+    for (const auto* arg : prepared->arguments) {
+        auto* info = arg ? ResolveConcreteTypeInfo(context, *arg) : nullptr;
+        if (!info) {
+            context.Fail(JitFailureKind::UnresolvedSymbol);
+            return nullptr;
+        }
+        infos.push_back(info);
+    }
+    return reinterpret_cast<void* (*)(void*, uint32_t, void**)>(prepared->create)(
+        prepared->typeTemplate, static_cast<uint32_t>(infos.size()), infos.data());
+}
 }
 
 FunctionContext::FunctionContext(GlobalContext& globalContext, const CHIR::Function* function,
@@ -209,68 +333,11 @@ bool FunctionContext::LoadTypeInfo(const CHIR::Type& input, const asmjit::x86::G
         return true;
     }
     if (type->IsGenericRelated()) {
-        auto arguments = type->GetTypeArgs();
-        std::string templateName;
-        if (type->IsClass() || type->IsStruct() || type->IsEnum()) {
-            const auto* custom = &static_cast<const CHIR::CustomType&>(*type);
-            if (custom->IsAutoEnvBase()) {
-                auto& builder = globalContext.GetCHIRBuilder();
-                if (custom->IsAutoEnvInstBase()) {
-                    custom = const_cast<CHIR::ClassType*>(static_cast<const CHIR::ClassType*>(custom))
-                                 ->GetSuperClassTy(&builder);
-                }
-                if (!custom || !custom->IsAutoEnvGenericBase()) {
-                    Fail(JitFailureKind::UnsupportedCall);
-                    return false;
-                }
-                auto args = custom->GetGenericArgs();
-                if (args.empty()) {
-                    Fail(JitFailureKind::UnsupportedCall);
-                    return false;
-                }
-                std::vector<CHIR::Type*> parameters(args.begin(), args.end() - 1);
-                arguments = {builder.GetType<CHIR::FuncType>(parameters, args.back())};
-                templateName = "Closure.tt";
-            } else {
-                const auto* def = custom->GetCustomTypeDef();
-                if (!def || !globalContext.GetRuntimeBindings().EnsureStandardPackage(def->GetPackageName()).empty()) {
-                    Fail(JitFailureKind::UnresolvedSymbol);
-                    return false;
-                }
-                const auto& package =
-                    def->GetGenericDecl() ? def->GetGenericDecl()->GetPackageName() : def->GetPackageName();
-                templateName = package + ":" + CHIR::GetCustomTypeIdentifier(*custom) + ".tt";
-            }
-        } else if (type->IsTuple()) {
-            templateName = "Tuple.tt";
-        } else if (type->IsRawArray()) {
-            templateName = "RawArray.tt";
-        } else if (type->IsCPointer()) {
-            templateName = "CPointer.tt";
-        } else if (type->IsBox()) {
-            templateName = "Box.tt";
-        } else if (type->IsFunc()) {
-            templateName = "CFunc.tt";
-            if (!arguments.empty()) {
-                std::rotate(arguments.begin(), arguments.end() - 1, arguments.end());
-            }
-        } else {
-            Fail(JitFailureKind::UnsupportedCall);
+        auto prepared = PrepareTypeTemplate(*this, *type);
+        if (!prepared) {
             return false;
         }
-        if (arguments.empty() || arguments.size() > (static_cast<size_t>(std::numeric_limits<int32_t>::max()) - 15) /
-                sizeof(uint64_t)) {
-            Fail(JitFailureKind::UnsupportedCall);
-            return false;
-        }
-        auto templateSymbol = globalContext.GetRuntimeBindings().Resolve(templateName);
-        auto helperSymbol = globalContext.GetRuntimeBindings().Resolve("CJ_MCC_GetOrCreateTypeInfo");
-        const auto* typeTemplate = std::get_if<void*>(&templateSymbol);
-        const auto* helper = std::get_if<void*>(&helperSymbol);
-        if (!typeTemplate || !*typeTemplate || !helper || !*helper) {
-            Fail(JitFailureKind::UnresolvedSymbol);
-            return false;
-        }
+        const auto& arguments = prepared->arguments;
         const auto stackSize = static_cast<uint32_t>((arguments.size() * sizeof(uint64_t) + 15) & ~size_t{15});
         MemoryUtils::ReserveStack(*this, stackSize);
         for (size_t i = 0; i < arguments.size(); ++i) {
@@ -280,10 +347,10 @@ bool FunctionContext::LoadTypeInfo(const CHIR::Type& input, const asmjit::x86::G
             assembler.mov(asmjit::x86::qword_ptr(asmjit::x86::rsp, static_cast<int32_t>(i * sizeof(uint64_t))),
                 asmjit::x86::rax);
         }
-        assembler.long_().mov(asmjit::x86::rdi, asmjit::imm(reinterpret_cast<uintptr_t>(*typeTemplate)));
+        assembler.long_().mov(asmjit::x86::rdi, asmjit::imm(reinterpret_cast<uintptr_t>(prepared->typeTemplate)));
         assembler.mov(asmjit::x86::esi, static_cast<uint32_t>(arguments.size()));
         assembler.mov(asmjit::x86::rdx, asmjit::x86::rsp);
-        assembler.long_().mov(asmjit::x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(*helper)));
+        assembler.long_().mov(asmjit::x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(prepared->create)));
         // Native CodeGen emits llvm.cj.get.type.info as a nounwind, readonly
         // intrinsic; its runtime helper is not a managed safepoint.
         assembler.call(asmjit::x86::r11);
@@ -293,21 +360,7 @@ bool FunctionContext::LoadTypeInfo(const CHIR::Type& input, const asmjit::x86::G
         }
         return true;
     }
-    if (type->IsClass() || type->IsStruct() || type->IsEnum()) {
-        const auto* def = static_cast<const CHIR::CustomType*>(type)->GetCustomTypeDef();
-        if (!def || !globalContext.GetRuntimeBindings().EnsureStandardPackage(def->GetPackageName()).empty()) {
-            Fail(JitFailureKind::UnresolvedSymbol);
-            return false;
-        }
-    }
-    auto symbol = globalContext.GetRuntimeBindings().Resolve("CJ_MCC_GetTypeByMangledName");
-    const auto* lookup = std::get_if<void*>(&symbol);
-    if (!lookup || !*lookup) {
-        Fail(JitFailureKind::UnresolvedSymbol);
-        return false;
-    }
-    const auto name = CHIR::GetTypeQualifiedName(*type, true);
-    auto* info = reinterpret_cast<void* (*)(const char*)>(*lookup)(name.c_str());
+    auto* info = ResolveConcreteTypeInfo(*this, *type);
     if (!info) {
         Fail(JitFailureKind::UnresolvedSymbol);
         return false;
