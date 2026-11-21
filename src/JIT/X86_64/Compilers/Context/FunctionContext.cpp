@@ -8,17 +8,20 @@
 
 #include "GlobalContext.h"
 #include "../../Utils/MemoryUtils.h"
+#include "../../RegisterAllocation/LocalFinalizerFrontier.h"
 #include "../../RegisterAllocation/SafepointLiveness.h"
 #include "../../Utils/StackFrameUtils.h"
 
 #include <algorithm>
 #include <cassert>
 #include <functional>
+#include <iterator>
 #include <limits>
 #include <ostream>
 #include <utility>
 
 #include "cangjie/CHIR/IR/Expression/Expression.h"
+#include "cangjie/CHIR/IR/Expression/Terminator.h"
 #include "cangjie/CHIR/IR/Type/ClassDef.h"
 #include "cangjie/CHIR/IR/Type/ExtendDef.h"
 #include "cangjie/Mangle/CHIRTypeManglingUtils.h"
@@ -473,7 +476,7 @@ bool FunctionContext::EmitExceptionLanding(const CHIR::Block& block, size_t call
     metadataBuilder.RecordCallSite(static_cast<uint32_t>(callStart - 4),
         static_cast<uint32_t>(callEnd - callStart), landing);
     assembler.lea(asmjit::x86::rsp, asmjit::x86::ptr(asmjit::x86::rbp, -static_cast<int32_t>(*frameSize)));
-    assembler.jmp(GetBlockLabel(&block));
+    assembler.jmp(GetEdgeLabel(&block));
     return GetError() == asmjit::kErrorOk;
 }
 
@@ -485,6 +488,125 @@ asmjit::Error FunctionContext::GetError() const noexcept
     return error == asmjit::kErrorOk ? emitterErrorHandler.firstError : error;
 }
 
+
+bool FunctionContext::PrepareLocalFinalizers()
+{
+    const auto* body = function->GetBody();
+    if (!body) {
+        Fail(JitFailureKind::InvalidFunctionContext);
+        return false;
+    }
+    for (const auto* block : body->GetAllBlocks()) {
+        if (block->GetFuncOrLambdaBody() != body) {
+            continue;
+        }
+        for (const auto* expression : block->GetExpressions()) {
+            if (expression->GetExprKind() != CHIR::ExprKind::ALLOCATE &&
+                expression->GetExprKind() != CHIR::ExprKind::TRY_ALLOCATE) {
+                continue;
+            }
+            const auto& allocation = static_cast<const CHIR::AllocateBase&>(*expression);
+            const auto* type = allocation.GetType();
+            if (!type || !type->IsClass() || !type->IsLocalRegion()) {
+                continue;
+            }
+            const auto* def = static_cast<const CHIR::ClassType*>(type)->GetClassDef();
+            if (!def || !def->GetFinalizer()) {
+                continue;
+            }
+            auto frontier = ComputeLocalFinalizerFrontier(*function, allocation);
+            const auto* sites = std::get_if<std::vector<LocalFinalizerSite>>(&frontier);
+            if (!sites || !allocation.GetResult()) {
+                Fail(JitFailureKind::UnsupportedLocalFinalizer, expression->GetExprKind());
+                return false;
+            }
+            for (const auto& site : *sites) {
+                const auto* after = std::get<0>(site);
+                const auto* predecessor = std::get<1>(site);
+                const auto* successor = std::get<2>(site);
+                if (after) {
+                    finalizersAfter[after].push_back(allocation.GetResult());
+                    continue;
+                }
+                auto edge = std::find_if(finalizerEdges.begin(), finalizerEdges.end(),
+                    [&](const FinalizerEdge& item) {
+                        return item.predecessor == predecessor && item.successor == successor;
+                    });
+                if (edge == finalizerEdges.end()) {
+                    auto label = assembler.newLabel();
+                    if (!predecessor || !successor || !label.isValid()) {
+                        Fail(JitFailureKind::BlockLabelCreationFailed);
+                        return false;
+                    }
+                    finalizerEdges.push_back({predecessor, successor, label, {}});
+                    edge = std::prev(finalizerEdges.end());
+                }
+                edge->objects.push_back(allocation.GetResult());
+            }
+        }
+    }
+    return true;
+}
+
+void FunctionContext::SetCurrentBlock(const CHIR::Block& block) noexcept
+{
+    currentBlock = &block;
+}
+
+bool FunctionContext::EmitFinalizerRemovals(
+    const std::vector<const CHIR::Value*>& objects, const CHIR::Expression& next)
+{
+    if (objects.empty()) {
+        return true;
+    }
+    auto resolved = globalContext.GetRuntimeBindings().Resolve("CJ_MCC_RemoveLocalFinalizer");
+    const auto* address = std::get_if<void*>(&resolved);
+    if (!address || !*address) {
+        Fail(JitFailureKind::UnresolvedSymbol);
+        return false;
+    }
+    for (auto it = objects.rbegin(); it != objects.rend(); ++it) {
+        if (!MemoryUtils::LoadValue(*this, *it, asmjit::x86::rdi)) {
+            return false;
+        }
+        assembler.long_().mov(asmjit::x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(*address)));
+        assembler.call(asmjit::x86::r11);
+        if (!RecordSafepoint(next)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool FunctionContext::EmitFinalizersAfter(const CHIR::Expression& expression, const CHIR::Expression& next)
+{
+    const auto found = finalizersAfter.find(&expression);
+    return found == finalizersAfter.end() || EmitFinalizerRemovals(found->second, next);
+}
+
+asmjit::Label FunctionContext::GetEdgeLabel(const CHIR::Block* successor)
+{
+    for (const auto& edge : finalizerEdges) {
+        if (edge.predecessor == currentBlock && edge.successor == successor) {
+            return edge.label;
+        }
+    }
+    return GetBlockLabel(successor);
+}
+
+bool FunctionContext::EmitFinalizerEdges()
+{
+    for (const auto& edge : finalizerEdges) {
+        assembler.bind(edge.label);
+        const auto expressions = edge.successor->GetExpressions();
+        if (expressions.empty() || !EmitFinalizerRemovals(edge.objects, *expressions.front())) {
+            Fail(JitFailureKind::UnsupportedLocalFinalizer);
+            return false;
+        }
+        assembler.jmp(GetBlockLabel(edge.successor));
+    }
+    return GetError() == asmjit::kErrorOk;
+}
 
 asmjit::Label FunctionContext::GetBlockLabel(const CHIR::Block* block)
 {

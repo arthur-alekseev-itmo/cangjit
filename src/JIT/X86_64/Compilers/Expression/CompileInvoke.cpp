@@ -264,7 +264,7 @@ void CompileCall(FunctionContext& context, const CHIR::DynamicDispatch& expressi
         }
     }
     if (normal && unwind && !context.GetFailure()) {
-        a.jmp(context.GetBlockLabel(normal));
+        a.jmp(context.GetEdgeLabel(normal));
         context.EmitExceptionLanding(*unwind, callStart, callEnd);
     }
 }

@@ -27,7 +27,7 @@ void CompileBranch::Compile(FunctionContext& ctx, const CHIR::Branch& expr)
     }
     auto& assembler = ctx.GetAssembler();
     assembler.test(asmjit::x86::rax, asmjit::x86::rax);
-    assembler.jnz(ctx.GetBlockLabel(trueBlock));
-    assembler.jmp(ctx.GetBlockLabel(falseBlock));
+    assembler.jnz(ctx.GetEdgeLabel(trueBlock));
+    assembler.jmp(ctx.GetEdgeLabel(falseBlock));
 }
 } // namespace Cangjie::JIT::X86_64

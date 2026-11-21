@@ -93,7 +93,7 @@ void CompileNumericCast::Compile(FunctionContext& context, const CHIR::NumericCa
     RegisterUtils::NormalizeInteger(assembler, asmjit::x86::rax, targetWidth, targetSigned);
     MemoryUtils::StoreValue(context, result, asmjit::x86::rax);
     if (normal && !context.GetFailure()) {
-        assembler.jmp(context.GetBlockLabel(normal));
+        assembler.jmp(context.GetEdgeLabel(normal));
     }
 }
 } // namespace Cangjie::JIT::X86_64

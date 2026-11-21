@@ -222,7 +222,7 @@ void EmitCall(FunctionContext& context, const CHIR::ApplyBase& expression, const
         MemoryUtils::StoreValue(context, expression.GetResult(), x86::rax);
     }
     if (normal && unwind && !context.GetFailure()) {
-        assembler.jmp(context.GetBlockLabel(normal));
+        assembler.jmp(context.GetEdgeLabel(normal));
         context.EmitExceptionLanding(*unwind, callStart, callEnd);
     }
 }

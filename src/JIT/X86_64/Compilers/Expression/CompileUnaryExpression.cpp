@@ -94,7 +94,7 @@ void CompileUnaryExpression::Compile(FunctionContext& ctx, const CHIR::UnaryExpr
     }
     MemoryUtils::StoreValue(ctx, result, asmjit::x86::rax);
     if (normal && !ctx.GetFailure()) {
-        a.jmp(ctx.GetBlockLabel(normal));
+        a.jmp(ctx.GetEdgeLabel(normal));
     }
 }
 } // namespace Cangjie::JIT::X86_64

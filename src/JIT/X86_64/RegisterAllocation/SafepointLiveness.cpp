@@ -253,15 +253,30 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
             error = "live value has no CHIR type";
             return -1;
         }
-        // Local-region objects are neither ordinary movable-heap roots nor
-        // stack addresses. Their registry and lifetime are runtime-managed;
-        // this stack-map format cannot identify their provenance here.
+        const auto* expr = value->IsLocalVar() ? static_cast<const CHIR::LocalVar*>(value)->GetExpr() : nullptr;
         const auto* referenceBase = type->IsRef() ? static_cast<const CHIR::RefType*>(type)->GetBaseType() : nullptr;
+        if (expr && expr->GetExprKind() == CHIR::ExprKind::ALLOCATE && referenceBase && referenceBase->IsRef()) {
+            const auto* storedBase = static_cast<const CHIR::RefType*>(referenceBase)->GetBaseType();
+            if (storedBase && storedBase->IsClass() && storedBase->IsMustLocalRegion() &&
+                allocation.GetAllocationSlot(id)) {
+                // The slot address moves with the stack; its contents are stable local-region pointers.
+                return 1;
+            }
+        }
         if (type->IsLocalRegion() || (referenceBase && referenceBase->IsLocalRegion())) {
-            error = "live local-region reference cannot be represented as a GC root";
+            // Definitely local objects are stable region allocations. The
+            // runtime's local-root/finalizer registry traces their heap fields.
+            // A maybe-local parameter can instead be a movable heap object.
+            const bool allocatedHere = expr &&
+                (expr->GetExprKind() == CHIR::ExprKind::ALLOCATE ||
+                    expr->GetExprKind() == CHIR::ExprKind::TRY_ALLOCATE);
+            if (referenceBase && referenceBase->IsClass() &&
+                (referenceBase->IsMustLocalRegion() || allocatedHere)) {
+                return 0;
+            }
+            error = "live maybe-local reference cannot be represented as a GC root";
             return -1;
         }
-        const auto* expr = value->IsLocalVar() ? static_cast<const CHIR::LocalVar*>(value)->GetExpr() : nullptr;
         // Landing-pad GetException denotes the runtime's unmanaged
         // ExceptionWrapper, not the managed exception returned by begin-catch.
         if (expr && expr->GetExprKind() == CHIR::ExprKind::GET_EXCEPTION) {

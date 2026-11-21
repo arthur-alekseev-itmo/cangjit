@@ -203,6 +203,9 @@ void CompileFunction::Compile(FunctionContext& context) const
         context.Fail(JitFailureKind::UnsupportedCallingConvention);
         return;
     }
+    if (!context.PrepareLocalFinalizers()) {
+        return;
+    }
     // Runtime metadata discovery reads a relative descriptor pointer here.
     context.GetAssembler().embedUInt32(0);
     MakePrologue(context);
@@ -313,6 +316,7 @@ void CompileFunction::Compile(FunctionContext& context) const
         }
     }
     MakeEpilogue(context);
+    context.EmitFinalizerEdges();
 }
 
 } // namespace Cangjie::JIT::X86_64

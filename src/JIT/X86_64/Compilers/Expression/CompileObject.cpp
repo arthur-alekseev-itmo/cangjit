@@ -37,7 +37,7 @@ void* Resolve(FunctionContext& context, const char* name)
 const char* AllocationSymbol(const CHIR::ClassDef& def, bool local)
 {
     if (def.GetFinalizer()) {
-        return "CJ_MCC_NewFinalizer";
+        return local ? "CJ_MCC_NewLocalObject" : "CJ_MCC_NewFinalizer";
     }
     const auto& package = def.GetPackageName();
     const auto& name = def.GetSrcCodeIdentifier();
@@ -74,12 +74,6 @@ void CompileAllocation(FunctionContext& context, const CHIR::AllocateBase& expre
         return;
     }
     const bool local = type->IsLocalRegion();
-    if (local && def->GetFinalizer()) {
-        // A local finalizer must be removed on every dead-out frontier,
-        // including exceptional edges and aliases, before its region ends.
-        context.Fail(JitFailureKind::UnsupportedLocalFinalizer, expression.GetExprKind());
-        return;
-    }
 
     const bool dynamic = type->IsGenericRelated();
     auto* typeInfo = dynamic ? nullptr : context.GetConcreteTypeInfo(*type);
@@ -161,8 +155,16 @@ void CompileAllocation(FunctionContext& context, const CHIR::AllocateBase& expre
         assembler.long_().mov(x86::r11, asmjit::imm(methods[i]));
         assembler.mov(x86::qword_ptr(x86::rax, static_cast<int32_t>(8 + i * sizeof(uint64_t))), x86::r11);
     }
+    if (local && def->GetFinalizer()) {
+        auto* addFinalizer = Resolve(context, "CJ_MCC_AddLocalFinalizer");
+        if (!addFinalizer || !MemoryUtils::LoadValue(context, result, x86::rdi)) {
+            return;
+        }
+        assembler.long_().mov(x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(addFinalizer)));
+        assembler.call(x86::r11);
+    }
     if (normal && unwind && !context.GetFailure()) {
-        assembler.jmp(context.GetBlockLabel(normal));
+        assembler.jmp(context.GetEdgeLabel(normal));
         context.EmitExceptionLanding(*unwind, callStart, callEnd);
     }
 }

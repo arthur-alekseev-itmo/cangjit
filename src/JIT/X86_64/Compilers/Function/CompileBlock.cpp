@@ -32,9 +32,18 @@
 
 namespace Cangjie::JIT::X86_64 {
 namespace {
+bool IsLocalClassReference(const CHIR::Type* type)
+{
+    if (!type || !type->IsRef()) {
+        return false;
+    }
+    const auto* base = static_cast<const CHIR::RefType*>(type)->GetBaseType();
+    return base && base->IsClass() && base->IsMustLocalRegion();
+}
+
 unsigned ScalarWidth(const CHIR::Type* type)
 {
-    return !type ? 0 : type->IsBoolean() ? 8 : RegisterUtils::IntegerWidth(*type);
+    return !type ? 0 : type->IsBoolean() ? 8 : IsLocalClassReference(type) ? 64 : RegisterUtils::IntegerWidth(*type);
 }
 
 bool MatchesReference(const CHIR::Value* reference, const CHIR::Type* type)
@@ -44,6 +53,10 @@ bool MatchesReference(const CHIR::Value* reference, const CHIR::Type* type)
         return false;
     }
     const auto* base = static_cast<const CHIR::RefType*>(reference->GetType())->GetBaseType();
+    if (IsLocalClassReference(type)) {
+        const auto* expr = reference->IsLocalVar() ? static_cast<const CHIR::LocalVar*>(reference)->GetExpr() : nullptr;
+        return base == type && expr && expr->GetExprKind() == CHIR::ExprKind::ALLOCATE;
+    }
     return base && base->GetTypeKind() == type->GetTypeKind();
 }
 
@@ -254,7 +267,7 @@ void CompileBeginCatch(FunctionContext& context, const CHIR::IntrinsicBase& expr
         MemoryUtils::StoreValue(context, expression.GetResult(), asmjit::x86::rax);
     }
     if (normal && unwind && !context.GetFailure()) {
-        a.jmp(context.GetBlockLabel(normal));
+        a.jmp(context.GetEdgeLabel(normal));
         context.EmitExceptionLanding(*unwind, callStart, callEnd);
     }
 }
@@ -288,13 +301,16 @@ void CompileRaiseException(FunctionContext& context, const CHIR::RaiseException&
 
 void CompileBlock::Compile(FunctionContext& context, const CHIR::Block& block)
 {
+    context.SetCurrentBlock(block);
     context.GetAssembler().bind(context.GetBlockLabel(&block));
     if (context.GetFailure() || context.GetError() != asmjit::kErrorOk) {
         return;
     }
-    for (const auto* expression : block.GetExpressions()) {
-        CompileExpression(context, *expression);
-        if (context.GetFailure() || context.GetError() != asmjit::kErrorOk) {
+    const auto expressions = block.GetExpressions();
+    for (size_t i = 0; i < expressions.size(); ++i) {
+        CompileExpression(context, *expressions[i]);
+        if (context.GetFailure() || context.GetError() != asmjit::kErrorOk ||
+            (i + 1 < expressions.size() && !context.EmitFinalizersAfter(*expressions[i], *expressions[i + 1]))) {
             return;
         }
     }

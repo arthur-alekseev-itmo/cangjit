@@ -46,6 +46,11 @@ public:
     bool RecordSafepoint(const CHIR::Expression& expression, const CHIR::Value* temporaryRoot = nullptr);
     bool EmitExceptionLanding(const CHIR::Block& block, size_t callStart, size_t callEnd);
     asmjit::Error GetError() const noexcept;
+    bool PrepareLocalFinalizers();
+    void SetCurrentBlock(const CHIR::Block& block) noexcept;
+    bool EmitFinalizersAfter(const CHIR::Expression& expression, const CHIR::Expression& next);
+    bool EmitFinalizerEdges();
+    asmjit::Label GetEdgeLabel(const CHIR::Block* successor);
     asmjit::Label GetBlockLabel(const CHIR::Block* block);
     asmjit::Label GetEpilogueLabel() const noexcept;
     void Fail(JitFailureKind kind, std::optional<CHIR::ExprKind> expressionKind = std::nullopt) noexcept;
@@ -71,6 +76,14 @@ private:
 
         asmjit::Error firstError = asmjit::kErrorOk;
     };
+    struct FinalizerEdge {
+        const CHIR::Block* predecessor;
+        const CHIR::Block* successor;
+        asmjit::Label label;
+        std::vector<const CHIR::Value*> objects;
+    };
+    bool EmitFinalizerRemovals(const std::vector<const CHIR::Value*>& objects, const CHIR::Expression& next);
+
 
     GlobalContext& globalContext;
     EmitterErrorHandler emitterErrorHandler;
@@ -81,6 +94,9 @@ private:
     std::optional<JitFailure> failure;
     asmjit::Label epilogueLabel;
     std::unordered_map<const CHIR::Block*, asmjit::Label> blockLabels;
+    const CHIR::Block* currentBlock = nullptr;
+    std::unordered_map<const CHIR::Expression*, std::vector<const CHIR::Value*>> finalizersAfter;
+    std::vector<FinalizerEdge> finalizerEdges;
     const CHIR::Function* function;
     std::vector<const CHIR::Function*> functionsToStub;
     std::vector<PendingLazyCallSite> lazyCallSites;
