@@ -77,7 +77,7 @@ void CompileAllocation(FunctionContext& context, const CHIR::AllocateBase& expre
     if (local && def->GetFinalizer()) {
         // A local finalizer must be removed on every dead-out frontier,
         // including exceptional edges and aliases, before its region ends.
-        context.Fail(JitFailureKind::UnsupportedAllocation, expression.GetExprKind());
+        context.Fail(JitFailureKind::UnsupportedLocalFinalizer, expression.GetExprKind());
         return;
     }
 
