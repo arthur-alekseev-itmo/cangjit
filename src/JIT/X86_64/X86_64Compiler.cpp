@@ -39,10 +39,9 @@ void X86_64Compiler::Compile(const CHIR::Package& package, std::ostream& output)
             return;
         }
         // The native entry runs package initializers before user.main. Do not
-        // silently skip source-level initialization with observable effects.
+        // silently skip initialization with observable effects.
         for (const auto* global : package.GetGlobalVars()) {
-            if (global && !global->IsImportedVar() && !global->TestAttr(CHIR::Attribute::COMPILER_ADD) &&
-                global->GetInitFunc()) {
+            if (global && !global->IsImportedVar() && global->GetInitFunc()) {
                 std::cerr << "JIT: package-local global initialization is not supported\n";
                 output.setstate(std::ios::badbit);
                 return;
