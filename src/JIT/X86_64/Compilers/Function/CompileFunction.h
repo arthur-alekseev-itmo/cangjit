@@ -13,11 +13,14 @@
 
 namespace Cangjie::CHIR {
 class Function;
+class Type;
 }
 
 namespace Cangjie::JIT::X86_64 {
 class FunctionContext;
 class GlobalContext;
+class Location;
+struct ParameterPlacement;
 
 
 class CompileFunction final {
@@ -30,6 +33,11 @@ public:
 private:
     void MakePrologue(FunctionContext& context) const;
     void MakeEpilogue(FunctionContext& context) const;
+    bool SaveReturnValue(FunctionContext& context) const;
+    void LoadReturnValueFromAddress(FunctionContext& context, const CHIR::Type& type, unsigned width) const;
+    bool SaveParameters(FunctionContext& context, const ParameterPlacement& placements) const;
+    bool SaveHiddenTypeInfo(FunctionContext& context, const ParameterPlacement& placements) const;
+    bool SaveHiddenTypeInfoLocation(FunctionContext& context, const Location& location, size_t index) const;
 
     GlobalContext& globalContext;
     const CHIR::Function& function;

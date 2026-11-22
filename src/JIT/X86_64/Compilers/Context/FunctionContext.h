@@ -14,6 +14,10 @@
 #include <vector>
 
 #include "JitFailure.h"
+#include "ExceptionLandingEmitter.h"
+#include "LocalFinalizers.h"
+#include "SafepointRecorder.h"
+#include "TypeInfoEmitter.h"
 #include "../../JitMetadataBuilder.h"
 #include "../../LazyCalls/LazyCallSiteRegistry.h"
 #include "../../RegisterAllocation/InterferenceGraph.h"
@@ -31,26 +35,25 @@ class Value;
 namespace Cangjie::JIT::X86_64 {
 class GlobalContext;
 
+// Per-function JIT state: emitted code, allocation, metadata, and diagnostics.
+// Also tracks labels and pending work while the function is compiled.
 class FunctionContext final {
 public:
     FunctionContext(GlobalContext& globalContext, const CHIR::Function* function, ValueNumeration valueNumeration,
         InterferenceGraph interferenceGraph, RegisterAllocation registerAllocation) noexcept;
+    bool Prepare();
 
     GlobalContext& GetGlobalContext() const noexcept;
     asmjit::CodeHolder& GetCode() noexcept;
     asmjit::x86::Assembler& GetAssembler() noexcept;
     JitMetadataBuilder& GetMetadataBuilder() noexcept;
+
     std::optional<int32_t> GetHiddenTypeInfoOffset(size_t index) const noexcept;
-    void* GetConcreteTypeInfo(const CHIR::Type& type);
-    bool LoadTypeInfo(const CHIR::Type& type, const asmjit::x86::Gp& target);
-    bool RecordSafepoint(const CHIR::Expression& expression, const CHIR::Value* temporaryRoot = nullptr);
-    bool EmitExceptionLanding(const CHIR::Block& block, size_t callStart, size_t callEnd);
+    TypeInfoEmitter& GetTypeInfoEmitter() noexcept { return typeInfoEmitter; }
+    SafepointRecorder& GetSafepointRecorder() noexcept { return safepointRecorder; }
+    ExceptionLandingEmitter& GetExceptionLandingEmitter() noexcept { return exceptionLandingEmitter; }
     asmjit::Error GetError() const noexcept;
-    bool PrepareLocalFinalizers();
-    void SetCurrentBlock(const CHIR::Block& block) noexcept;
-    bool EmitFinalizersAfter(const CHIR::Expression& expression, const CHIR::Expression& next);
-    bool EmitFinalizerEdges();
-    asmjit::Label GetEdgeLabel(const CHIR::Block* successor);
+    LocalFinalizers& GetLocalFinalizers() noexcept { return localFinalizers; }
     asmjit::Label GetBlockLabel(const CHIR::Block* block);
     asmjit::Label GetEpilogueLabel() const noexcept;
     void Fail(JitFailureKind kind, std::optional<CHIR::ExprKind> expressionKind = std::nullopt) noexcept;
@@ -76,13 +79,8 @@ private:
 
         asmjit::Error firstError = asmjit::kErrorOk;
     };
-    struct FinalizerEdge {
-        const CHIR::Block* predecessor;
-        const CHIR::Block* successor;
-        asmjit::Label label;
-        std::vector<const CHIR::Value*> objects;
-    };
-    bool EmitFinalizerRemovals(const std::vector<const CHIR::Value*>& objects, const CHIR::Expression& next);
+    void ReserveHiddenTypeInfoSlots() noexcept;
+    bool InitializeAssembler();
 
 
     GlobalContext& globalContext;
@@ -92,11 +90,12 @@ private:
     asmjit::Error error;
     JitMetadataBuilder metadataBuilder;
     std::optional<JitFailure> failure;
+    SafepointRecorder safepointRecorder{*this};
+    ExceptionLandingEmitter exceptionLandingEmitter{*this};
+    TypeInfoEmitter typeInfoEmitter{*this};
+    LocalFinalizers localFinalizers{*this};
     asmjit::Label epilogueLabel;
     std::unordered_map<const CHIR::Block*, asmjit::Label> blockLabels;
-    const CHIR::Block* currentBlock = nullptr;
-    std::unordered_map<const CHIR::Expression*, std::vector<const CHIR::Value*>> finalizersAfter;
-    std::vector<FinalizerEdge> finalizerEdges;
     const CHIR::Function* function;
     std::vector<const CHIR::Function*> functionsToStub;
     std::vector<PendingLazyCallSite> lazyCallSites;

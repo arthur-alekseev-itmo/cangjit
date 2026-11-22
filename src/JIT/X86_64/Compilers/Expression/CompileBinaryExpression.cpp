@@ -87,40 +87,107 @@ void EmitArithmeticException(FunctionContext& ctx, const CHIR::Expression& expr,
     const CHIR::Block* unwind, const char* message, bool overflow)
 {
     auto& global = ctx.GetGlobalContext();
-    const auto* literal = global.GetStringLiteral(message);
-    auto factory = global.GetRuntimeBindings().Resolve(
-        overflow ? "rt$CreateOverflowException_msg" : "rt$CreateArithmeticException_msg");
-    auto thrower = global.GetRuntimeBindings().Resolve("CJ_MCC_ThrowException");
-    auto* factoryAddress = std::get_if<void*>(&factory);
-    auto* throwAddress = std::get_if<void*>(&thrower);
-    if (!literal || !factoryAddress || !*factoryAddress || !throwAddress || !*throwAddress ||
-        !expr.GetResult()) {
+    const auto* literal = global.GetStringLiteralPool().GetOrCreate(message);
+    auto factory = overflow ? global.GetRuntimeBindings().GetCreateOverflowException()
+                            : global.GetRuntimeBindings().GetCreateArithmeticException();
+    auto thrower = global.GetRuntimeBindings().GetThrowException();
+    if (!literal || !factory || !thrower || !expr.GetResult()) {
         ctx.Fail(JitFailureKind::UnresolvedSymbol, expr.GetExprKind());
         return;
     }
     auto& a = ctx.GetAssembler();
     a.long_().mov(asmjit::x86::rdi, asmjit::imm(reinterpret_cast<uintptr_t>(literal)));
-    a.long_().mov(asmjit::x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(*factoryAddress)));
+    a.long_().mov(asmjit::x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(factory.Value())));
     const auto factoryStart = a.offset();
     a.call(asmjit::x86::r11);
     const auto factoryEnd = a.offset();
-    if (!ctx.RecordSafepoint(expr) || !MemoryUtils::StoreValue(ctx, expr.GetResult(), asmjit::x86::rax)) {
+    if (!ctx.GetSafepointRecorder().Record(expr) || !MemoryUtils::StoreValue(ctx, expr.GetResult(), asmjit::x86::rax)) {
         return;
     }
     a.mov(asmjit::x86::rdi, asmjit::x86::rax);
-    a.long_().mov(asmjit::x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(*throwAddress)));
+    a.long_().mov(asmjit::x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(thrower.Value())));
     const auto throwStart = a.offset();
     a.call(asmjit::x86::r11);
     const auto throwEnd = a.offset();
-    if (!ctx.RecordSafepoint(expr, expr.GetResult())) {
+    if (!ctx.GetSafepointRecorder().Record(expr, expr.GetResult())) {
         return;
     }
     a.ud2();
     if (unwind) {
-        ctx.EmitExceptionLanding(*unwind, factoryStart, factoryEnd);
-        ctx.EmitExceptionLanding(*unwind, throwStart, throwEnd);
+        ctx.GetExceptionLandingEmitter().Emit(*unwind, factoryStart, factoryEnd);
+        ctx.GetExceptionLandingEmitter().Emit(*unwind, throwStart, throwEnd);
     }
 }
+
+namespace {
+void EmitFloatComparison(asmjit::x86::Assembler& a, CHIR::BinaryExprKind kind, bool single)
+{
+    using K = CHIR::BinaryExprKind;
+    using namespace asmjit::x86;
+    if (single) a.ucomiss(xmm0, xmm1);
+    else a.ucomisd(xmm0, xmm1);
+    switch (kind) {
+        case K::EQUAL: a.sete(al); break;
+        case K::NOTEQUAL: a.setne(al); break;
+        case K::LT: a.setb(al); break;
+        case K::LE: a.setbe(al); break;
+        case K::GT: a.seta(al); break;
+        case K::GE: a.setae(al); break;
+        default: return;
+    }
+    // Unordered comparisons are true only for !=.
+    if (kind == K::NOTEQUAL) {
+        a.setp(cl);
+        a.or_(al, cl);
+    } else if (kind == K::EQUAL || kind == K::LT || kind == K::LE) {
+        a.setnp(cl);
+        a.and_(al, cl);
+    }
+    a.movzx(rax, al);
+}
+
+void EmitFloatArithmetic(asmjit::x86::Assembler& a, CHIR::BinaryExprKind kind, bool single)
+{
+    using K = CHIR::BinaryExprKind;
+    using namespace asmjit::x86;
+    switch (kind) {
+        case K::ADD: if (single) a.addss(xmm0, xmm1); else a.addsd(xmm0, xmm1); break;
+        case K::SUB: if (single) a.subss(xmm0, xmm1); else a.subsd(xmm0, xmm1); break;
+        case K::MUL: if (single) a.mulss(xmm0, xmm1); else a.mulsd(xmm0, xmm1); break;
+        case K::DIV: if (single) a.divss(xmm0, xmm1); else a.divsd(xmm0, xmm1); break;
+        default: break;
+    }
+}
+
+void CompileFloatBinary(FunctionContext& ctx, const CHIR::BinaryExpressionBase& expr,
+    const CHIR::Block* normal)
+{
+    using K = CHIR::BinaryExprKind;
+    const auto kind = expr.GetOpKind();
+    const bool comparison = kind >= K::LT && kind <= K::NOTEQUAL;
+    if (!comparison && kind != K::ADD && kind != K::SUB && kind != K::MUL && kind != K::DIV) {
+        ctx.Fail(JitFailureKind::UnsupportedBinaryOperation);
+        return;
+    }
+    if (!MemoryUtils::LoadFloatValue(ctx, expr.GetLHSOperand(), asmjit::x86::xmm0, asmjit::x86::rax) ||
+        !MemoryUtils::LoadFloatValue(ctx, expr.GetRHSOperand(), asmjit::x86::xmm1, asmjit::x86::rax)) {
+        return;
+    }
+    auto& a = ctx.GetAssembler();
+    const bool single = expr.GetLHSOperand()->GetType()->GetTypeKind() == CHIR::Type::TYPE_FLOAT32;
+    if (comparison) {
+        EmitFloatComparison(a, kind, single);
+        MemoryUtils::StoreValue(ctx, expr.GetResult(), asmjit::x86::rax);
+    } else {
+        EmitFloatArithmetic(a, kind, single);
+        MemoryUtils::StoreFloatValue(ctx, expr.GetResult(), asmjit::x86::xmm0, asmjit::x86::rax);
+    }
+    if (normal && !ctx.GetFailure()) {
+        a.jmp(ctx.GetLocalFinalizers().GetEdgeLabel(normal));
+    }
+}
+} // namespace
+
 
 void CompileBinaryExpression::Compile(FunctionContext& ctx, const CHIR::BinaryExpressionBase& expr,
     const CHIR::Block* normal, const CHIR::Block* unwind)
@@ -148,6 +215,11 @@ void CompileBinaryExpression::Compile(FunctionContext& ctx, const CHIR::BinaryEx
         (comparison || logical ? !result->GetType()->IsBoolean() :
             result->GetType()->GetTypeKind() != type->GetTypeKind())) {
         ctx.Fail(JitFailureKind::IncompatibleBinaryTypes);
+        return;
+    }
+    if (type->GetTypeKind() == CHIR::Type::TYPE_FLOAT32 ||
+        type->GetTypeKind() == CHIR::Type::TYPE_FLOAT64) {
+        CompileFloatBinary(ctx, expr, normal);
         return;
     }
     if ((!width && !boolean) || (arithmetic && !width) || (bitwise && !width) ||
@@ -270,7 +342,7 @@ void CompileBinaryExpression::Compile(FunctionContext& ctx, const CHIR::BinaryEx
     }
     MemoryUtils::StoreValue(ctx, result, asmjit::x86::rax);
     if (normal && !ctx.GetFailure()) {
-        a.jmp(ctx.GetEdgeLabel(normal));
+        a.jmp(ctx.GetLocalFinalizers().GetEdgeLabel(normal));
     }
 }
 } // namespace Cangjie::JIT::X86_64

@@ -475,6 +475,7 @@ public:
     std::string outputObjCGenDir = "";
 
     std::vector<std::string> importPaths; /**< .cjo search paths */
+    std::vector<std::string> librarySearchPaths; /**< -L library search paths */
 #ifdef CANGJIE_CODEGEN_CJNATIVE_BACKEND
     std::vector<std::string> pluginPaths; /**< meta-transform plugins */
 #endif

@@ -25,6 +25,11 @@ namespace Cangjie::JIT::X86_64 {
 namespace {
 namespace x86 = asmjit::x86;
 
+bool IsScalarFloat(const CHIR::Type& type)
+{
+    return type.GetTypeKind() == CHIR::Type::TYPE_FLOAT32 || type.GetTypeKind() == CHIR::Type::TYPE_FLOAT64;
+}
+
 const CHIR::Function* ValidateCall(FunctionContext& context, const CHIR::ApplyBase& expression)
 {
     const auto* calleeValue = expression.GetCallee();
@@ -47,7 +52,7 @@ const CHIR::Function* ValidateCall(FunctionContext& context, const CHIR::ApplyBa
     const bool objectReturn = returnBase &&
         (returnBase->IsClass() || returnBase->IsRawArray() || returnBase->IsBox());
     if (!noResult && !RegisterUtils::IntegerWidth(*returnType) && !returnType->IsBoolean() &&
-        !objectReturn && !returnType->IsCPointer() && !returnType->IsCString()) {
+        !objectReturn && !returnType->IsCPointer() && !returnType->IsCString() && !IsScalarFloat(*returnType)) {
         context.Fail(JitFailureKind::UnsupportedReturnType);
         return nullptr;
     }
@@ -65,7 +70,7 @@ bool ValidateArguments(FunctionContext& context, const CHIR::ApplyBase& expressi
         const auto* parameter = parameters[i];
         const auto* argument = expression.GetOperand(i + 1);
         if ((!RegisterUtils::IntegerWidth(*parameter->GetType()) && !parameter->GetType()->IsBoolean() &&
-            !parameter->GetType()->IsRef()) ||
+            !parameter->GetType()->IsRef() && !IsScalarFloat(*parameter->GetType())) ||
             !argument || !argument->GetType() ||
             argument->GetType()->GetTypeKind() != parameter->GetType()->GetTypeKind()) {
             context.Fail(JitFailureKind::UnsupportedCall);
@@ -79,17 +84,16 @@ CodeAddress ResolveAddress(FunctionContext& context, const CHIR::Function& calle
 {
     auto& global = context.GetGlobalContext();
     if (callee.IsImportedFunc()) {
-        if (!global.GetRuntimeBindings().EnsureStandardPackage(callee.GetPackageName()).empty()) {
+        if (!global.GetRuntimeBindings().EnsurePackage(callee.GetPackageName())) {
             context.Fail(JitFailureKind::UnresolvedSymbol);
             return 0;
         }
         auto symbol = global.GetRuntimeBindings().Resolve(callee.GetIdentifierWithoutPrefix());
-        const auto* address = std::get_if<void*>(&symbol);
-        if (!address || !*address) {
+        if (!symbol) {
             context.Fail(JitFailureKind::UnresolvedSymbol);
             return 0;
         }
-        return reinterpret_cast<CodeAddress>(*address);
+        return reinterpret_cast<CodeAddress>(symbol.Value());
     }
     auto& record = global.GetFunctionRegistry().GetOrCreate(callee);
     if (record.GetState() == FunctionState::FAILED) {
@@ -150,17 +154,19 @@ bool PlaceArguments(FunctionContext& context, const CHIR::ApplyBase& expression,
         }
     }
     for (size_t i = 0; i < parameters.size(); ++i) {
-        const auto* location = placement.locations.find(parameters[i])->second.AsRegister();
-        if (!location) {
-            continue;
-        }
-        const auto reg = RegisterUtils::Get64BitRegister(location->type);
-        if (!reg) {
-            context.Fail(JitFailureKind::UnsupportedCallingConvention);
-            return false;
-        }
-        if (!MemoryUtils::LoadValue(context, expression.GetOperand(i + 1), *reg)) {
-            return false;
+        const auto& location = placement.locations.find(parameters[i])->second;
+        if (const auto* reg = location.AsRegister()) {
+            const auto target = RegisterUtils::Get64BitRegister(reg->type);
+            if (!target || !MemoryUtils::LoadValue(context, expression.GetOperand(i + 1), *target)) {
+                context.Fail(JitFailureKind::UnsupportedCallingConvention);
+                return false;
+            }
+        } else if (const auto* simd = location.AsSimdRegister()) {
+            const auto target = RegisterUtils::GetArgumentSimdRegister(simd->index);
+            if (!target || !MemoryUtils::LoadFloatValue(context, expression.GetOperand(i + 1), *target, x86::rax)) {
+                context.Fail(JitFailureKind::UnsupportedCallingConvention);
+                return false;
+            }
         }
     }
     size_t typeIndex = 0;
@@ -199,7 +205,7 @@ void EmitCall(FunctionContext& context, const CHIR::ApplyBase& expression, const
     const auto callStart = assembler.offset();
     assembler.call(x86::r11);
     const auto callEnd = assembler.offset();
-    if (!context.RecordSafepoint(expression)) {
+    if (!context.GetSafepointRecorder().Record(expression)) {
         return;
     }
     if (!callee.IsImportedFunc()) {
@@ -215,15 +221,21 @@ void EmitCall(FunctionContext& context, const CHIR::ApplyBase& expression, const
     MemoryUtils::ReleaseStack(context, stackSize);
     const auto* returnType = callee.GetReturnType();
     if (!returnType->IsUnit() && !returnType->IsNothing() && !returnType->IsVoid()) {
-        const auto width = returnType->IsBoolean() ? 8U : RegisterUtils::IntegerWidth(*returnType);
-        if (width) {
-            RegisterUtils::NormalizeInteger(assembler, x86::rax, width, returnType->IsSignedInteger());
+        if (IsScalarFloat(*returnType)) {
+            if (!MemoryUtils::StoreFloatValue(context, expression.GetResult(), x86::xmm0, x86::rax)) {
+                return;
+            }
+        } else {
+            const auto width = returnType->IsBoolean() ? 8U : RegisterUtils::IntegerWidth(*returnType);
+            if (width) {
+                RegisterUtils::NormalizeInteger(assembler, x86::rax, width, returnType->IsSignedInteger());
+            }
+            MemoryUtils::StoreValue(context, expression.GetResult(), x86::rax);
         }
-        MemoryUtils::StoreValue(context, expression.GetResult(), x86::rax);
     }
     if (normal && unwind && !context.GetFailure()) {
-        assembler.jmp(context.GetEdgeLabel(normal));
-        context.EmitExceptionLanding(*unwind, callStart, callEnd);
+        assembler.jmp(context.GetLocalFinalizers().GetEdgeLabel(normal));
+        context.GetExceptionLandingEmitter().Emit(*unwind, callStart, callEnd);
     }
 }
 

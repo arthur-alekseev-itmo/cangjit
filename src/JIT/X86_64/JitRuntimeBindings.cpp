@@ -7,186 +7,427 @@
 #include "JitRuntimeBindings.h"
 
 #include <cstdio>
+#include <cstdlib>
+#include <exception>
 #include <dlfcn.h>
+#include <filesystem>
 #include <utility>
 
 namespace Cangjie::JIT::X86_64 {
 namespace {
-// These signatures follow the public Cangjie.h API. RuntimeParam is opaque
-// here so building the compiler does not require an installed runtime SDK.
-using InitRuntime = int (*)(const ::RuntimeParam*);
-using FiniRuntime = int (*)();
-using LibraryOperation = int (*)(const char*);
-using FindSymbol = void* (*)(const char*, const char*);
+constexpr std::string_view STANDARD_PACKAGE_PREFIX = "std.";
+constexpr std::string_view STANDARD_LIBRARY_PREFIX = "libcangjie-std-";
+constexpr std::string_view SHARED_LIBRARY_SUFFIX = ".so";
 
-constexpr const char* REQUIRED_SYMBOLS[] = {
-    "InitCJRuntime", "FiniCJRuntime", "LoadCJLibraryWithInit",
-    "UnloadCJLibrary", "FindCJSymbol", "RunCJTask", "GetTaskRet", "ReleaseHandle", "CJ_MCC_N2CStub",
-    "CJ_MCC_ThrowException", "CJ_MCC_GetExceptionWrapper", "CJ_MCC_PostThrowException"
-};
+std::vector<std::string> PackageLibraryNames(std::string_view package)
+{
+    if (package.substr(0, STANDARD_PACKAGE_PREFIX.size()) == STANDARD_PACKAGE_PREFIX) {
+        return {std::string(STANDARD_LIBRARY_PREFIX) +
+            std::string(package.substr(STANDARD_PACKAGE_PREFIX.size())) + std::string(SHARED_LIBRARY_SUFFIX)};
+    }
+    std::string name(package);
+    const auto organization = name.find("::");
+    std::string suffix;
+    if (organization != std::string::npos) {
+        suffix = "@" + name.substr(0, organization);
+        name.erase(0, organization + 2);
+    }
+    std::vector<std::string> names{"lib" + name + suffix + std::string(SHARED_LIBRARY_SUFFIX)};
+    const auto dot = name.find('.');
+    if (dot != std::string::npos) {
+        names.push_back("lib" + name.substr(0, dot) + suffix + std::string(SHARED_LIBRARY_SUFFIX));
+    }
+    return names;
+}
+
+std::optional<std::string> FindLibraryInDirectory(const std::string& directory, const std::string& name)
+{
+    const auto path = std::filesystem::path(directory.empty() ? "." : directory) / name;
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(path, error)) {
+        return std::nullopt;
+    }
+    return path.string();
+}
+
+std::optional<std::string> FindLibraryInDirectories(
+    const std::vector<std::string>& directories, const std::string& name)
+{
+    for (const auto& directory : directories) {
+        if (auto path = FindLibraryInDirectory(directory, name)) {
+            return path;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> FindLibraryInEnvironment(const std::string& name)
+{
+    const char* environment = std::getenv("LIBRARY_PATH");
+    std::string_view paths = environment ? environment : "";
+    while (!paths.empty()) {
+        const auto separator = paths.find(':');
+        if (auto path = FindLibraryInDirectory(std::string(paths.substr(0, separator)), name)) {
+            return path;
+        }
+        if (separator == std::string_view::npos) {
+            break;
+        }
+        paths.remove_prefix(separator + 1);
+    }
+    return std::nullopt;
+}
+
 }
 
 BindingResult JitRuntimeBindings::Initialize(const RuntimeConfig& config)
 {
     if (runtime != nullptr) {
-        return "runtime bindings are already initialized or could not be shut down";
+        return BindingResult::Failure({RuntimeErrorKind::AlreadyInitialized});
     }
-    const auto& [runtimePath, requestedLibraries, params, owner, stackGrowth] = config;
+    const auto& [runtimePath, requestedLibraries, params, owner, stackGrowth, imports, searchPaths] = config;
     // This is a host assertion, not a runtime switch. Consumers must pass the
     // same value to the metadata encoder; no public query exposes the mode.
+    // Stack roots in metadata must match the runtime's stack-growth setting.
     (void)stackGrowth;
     if (runtimePath.empty() || (owner && params == nullptr)) {
-        return "a runtime library path and owner runtime parameters are required";
+        return BindingResult::Failure({RuntimeErrorKind::MissingRuntimeConfig});
     }
-    for (auto it = requestedLibraries.begin(); it != requestedLibraries.end(); ++it) {
-        if (it->empty()) {
-            return "native library path is empty";
-        }
-        const auto basename = it->substr(it->find_last_of('/') + 1);
-        if (basename.empty()) {
-            return "native library basename is empty";
-        }
-        for (auto previous = requestedLibraries.begin(); previous != it; ++previous) {
-            if (previous->substr(previous->find_last_of('/') + 1) == basename) {
-                return "native library basenames must be distinct: " + basename;
-            }
-        }
+    if (auto result = ValidateLibraries(requestedLibraries); !result) {
+        return result;
     }
-    const auto separator = runtimePath.find_last_of('/');
-    runtimeDirectory = separator == std::string::npos ? "." : runtimePath.substr(0, separator);
 
-    runtime = dlopen(runtimePath.c_str(), RTLD_NOW | RTLD_GLOBAL);
-    if (!runtime) {
-        const char* error = dlerror();
-        return std::string("cannot load Cangjie runtime: ") + (error ? error : "unknown dynamic loader error");
+    if (auto result = LoadRuntime(runtimePath); !result) {
+        return result;
     }
 
     try {
-        for (const char* name : REQUIRED_SYMBOLS) {
-            dlerror();
-            void* address = dlsym(runtime, name);
-            const char* error = dlerror();
-            if (error || !address) {
-                std::string message = std::string("missing runtime symbol ") + name + (error ? ": " : "") +
-                    (error ? error : "");
-                Shutdown();
-                return message;
-            }
-            symbols.emplace(name, address);
+        importPaths = imports;
+        librarySearchPaths = searchPaths;
+        if (auto result = LoadRequiredSymbols(); !result) {
+            return FailInitialization(std::move(result).Error());
         }
         libraries.reserve(requestedLibraries.size());
-        if (owner) {
-            int result = reinterpret_cast<InitRuntime>(symbols.at("InitCJRuntime"))(params);
-            if (result != 0) {
-                Shutdown();
-                return "InitCJRuntime failed with error " + std::to_string(result);
-            }
-            ownsRuntime = true;
+        if (auto result = InitializeRuntime(params, owner); !result) {
+            return FailInitialization(std::move(result).Error());
         }
-        for (const auto& library : requestedLibraries) {
-            // Copy before calling into the runtime, so an allocation failure
-            // cannot lose track of a successfully loaded library.
-            libraries.push_back(library);
-            int result = reinterpret_cast<LibraryOperation>(symbols.at("LoadCJLibraryWithInit"))(library.c_str());
-            if (result != 0) {
-                libraries.pop_back(); // the runtime rolls back a failed load
-                Shutdown();
-                return "LoadCJLibraryWithInit failed for " + library + ": " + std::to_string(result);
-            }
+        if (auto result = LoadLibraries(requestedLibraries); !result) {
+            return FailInitialization(std::move(result).Error());
         }
         initialized = true;
-        return {};
+        return BindingResult::Success();
     } catch (...) {
-        Shutdown();
+        auto cleanup = Close();
+        if (!cleanup) {
+            std::fputs("JIT runtime initialization cleanup failed\n", stderr);
+            std::terminate();
+        }
         throw;
     }
 }
 
-BindingResult JitRuntimeBindings::EnsureStandardPackage(std::string_view package)
+BindingResult JitRuntimeBindings::FailInitialization(RuntimeError error)
 {
-    constexpr std::string_view prefix = "std.";
-    if (package.substr(0, prefix.size()) != prefix) {
-        return {};
+    auto cleanup = Close();
+    if (!cleanup) {
+        auto failure = std::move(cleanup).Error();
+        error.cleanup = RuntimeFailure{failure.kind, failure.code, std::move(failure.detail)};
     }
-    if (!initialized) {
-        return "runtime bindings are not initialized";
-    }
-    const auto basename = std::string("libcangjie-std-") + std::string(package.substr(prefix.size())) + ".so";
-    for (const auto& library : libraries) {
-        if (library.substr(library.find_last_of('/') + 1) == basename) {
-            return {};
+    return BindingResult::Failure(std::move(error));
+}
+
+BindingResult JitRuntimeBindings::ValidateLibraries(const std::vector<std::string>& requestedLibraries)
+{
+    for (auto it = requestedLibraries.begin(); it != requestedLibraries.end(); ++it) {
+        if (it->empty()) {
+            return BindingResult::Failure({RuntimeErrorKind::EmptyLibraryPath});
+        }
+        const auto basename = it->substr(it->find_last_of('/') + 1);
+        if (basename.empty()) {
+            return BindingResult::Failure({RuntimeErrorKind::EmptyLibraryBasename});
+        }
+        for (auto previous = requestedLibraries.begin(); previous != it; ++previous) {
+            if (previous->substr(previous->find_last_of('/') + 1) == basename) {
+                return BindingResult::Failure({RuntimeErrorKind::DuplicateLibraryBasename, 0, basename});
+            }
         }
     }
-    const auto path = runtimeDirectory + "/" + basename;
-    libraries.push_back(path);
-    const int result = reinterpret_cast<LibraryOperation>(symbols.at("LoadCJLibraryWithInit"))(path.c_str());
-    if (result != 0) {
-        libraries.pop_back();
-        return "LoadCJLibraryWithInit failed for " + path + ": " + std::to_string(result);
+    return BindingResult::Success();
+}
+
+std::string JitRuntimeBindings::GetRuntimeDirectory(const std::string& runtimePath)
+{
+    const auto separator = runtimePath.find_last_of('/');
+    return separator == std::string::npos ? "." : runtimePath.substr(0, separator);
+}
+
+BindingResult JitRuntimeBindings::LoadRuntime(const std::string& runtimePath)
+{
+    runtimeDirectory = GetRuntimeDirectory(runtimePath);
+    runtime = dlopen(runtimePath.c_str(), RTLD_NOW | RTLD_GLOBAL);
+    if (!runtime) {
+        const char* error = dlerror();
+        return BindingResult::Failure(
+            {RuntimeErrorKind::RuntimeOpenFailed, 0, error ? error : "unknown dynamic loader error"});
     }
-    return {};
+    return BindingResult::Success();
+}
+
+BindingResult JitRuntimeBindings::LoadRequiredSymbols()
+{
+#define JIT_RUNTIME_FUNCTION(name, type, symbol, required) \
+    if (required) { \
+        dlerror(); \
+        void* address = dlsym(runtime, symbol); \
+        const char* error = dlerror(); \
+        if (error || !address) { \
+            return BindingResult::Failure({RuntimeErrorKind::RequiredSymbolMissing, 0, \
+                std::string(symbol) + (error ? ": " : "") + (error ? error : "")}); \
+        } \
+        name = reinterpret_cast<type>(address); \
+    }
+#include "RuntimeFunctions.inc"
+#undef JIT_RUNTIME_FUNCTION
+    return BindingResult::Success();
+}
+
+BindingResult JitRuntimeBindings::InitializeRuntime(const ::RuntimeParam* params, bool owner)
+{
+    if (!owner) {
+        return BindingResult::Success();
+    }
+    int result = InitRuntime(params);
+    if (result != 0) {
+        return BindingResult::Failure({RuntimeErrorKind::InitializationFailed, result});
+    }
+    ownsRuntime = true;
+    return BindingResult::Success();
+}
+
+BindingResult JitRuntimeBindings::LoadLibraries(const std::vector<std::string>& requestedLibraries)
+{
+    for (const auto& library : requestedLibraries) {
+        if (auto result = LoadLibraryPath(library); !result) {
+            return result;
+        }
+    }
+    return BindingResult::Success();
+}
+
+BindingResult JitRuntimeBindings::LoadLibraryPath(const std::string& path)
+{
+    // Track the library before calling into the runtime so allocation failure
+    // cannot lose a successfully loaded library.
+    libraries.push_back(path);
+    const int result = LoadLibrary(path.c_str());
+    if (result != 0) {
+        libraries.pop_back(); // the runtime rolls back a failed load
+        return BindingResult::Failure({RuntimeErrorKind::LibraryLoadFailed, result, path});
+    }
+    return BindingResult::Success();
+}
+
+bool JitRuntimeBindings::IsLibraryLoaded(std::string_view name) const noexcept
+{
+    for (const auto& library : libraries) {
+        const std::string_view path = library;
+        if (path.substr(path.find_last_of('/') + 1) == name) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::optional<std::string> JitRuntimeBindings::FindPackageLibrary(const std::string& name) const
+{
+    if (auto path = FindLibraryInDirectories(librarySearchPaths, name)) {
+        return path;
+    }
+    if (auto path = FindLibraryInDirectory(runtimeDirectory, name)) {
+        return path;
+    }
+    if (auto path = FindLibraryInDirectories(importPaths, name)) {
+        return path;
+    }
+    if (auto path = FindLibraryInDirectory(".", name)) {
+        return path;
+    }
+    return FindLibraryInEnvironment(name);
+}
+
+BindingResult JitRuntimeBindings::EnsurePackage(std::string_view package)
+{
+    if (!initialized) {
+        return BindingResult::Failure({RuntimeErrorKind::NotInitialized});
+    }
+    for (const auto& name : PackageLibraryNames(package)) {
+        if (IsLibraryLoaded(name)) {
+            return BindingResult::Success();
+        }
+        if (auto path = FindPackageLibrary(name)) {
+            return LoadLibraryPath(*path);
+        }
+    }
+    return BindingResult::Failure({RuntimeErrorKind::PackageLibraryNotFound, 0, std::string(package)});
 }
 
 SymbolResult JitRuntimeBindings::Resolve(SymbolName name)
 {
     if (!initialized) {
-        return std::string("runtime bindings are not initialized");
+        return SymbolResult::Failure({RuntimeErrorKind::NotInitialized});
     }
     if (name.empty() || name.find('\0') != SymbolName::npos) {
-        return std::string("invalid symbol name");
+        return SymbolResult::Failure({RuntimeErrorKind::InvalidSymbolName});
     }
     std::string key(name);
     auto existing = symbols.find(key);
     if (existing != symbols.end()) {
-        return existing->second;
+        return SymbolResult::Success(existing->second);
     }
-    auto find = reinterpret_cast<FindSymbol>(symbols.at("FindCJSymbol"));
+    auto find = FindSymbol;
     for (const auto& library : libraries) {
         if (void* address = find(library.c_str(), key.c_str())) {
             symbols.emplace(std::move(key), address);
-            return address;
+            return SymbolResult::Success(address);
         }
     }
     dlerror();
     void* address = dlsym(runtime, key.c_str());
     const char* error = dlerror();
     if (error || !address) {
-        return std::string("symbol not found: ") + key + (error ? std::string(": ") + error : "");
+        return SymbolResult::Failure(
+            {RuntimeErrorKind::SymbolNotFound, 0, key + (error ? std::string(": ") + error : "")});
     }
     symbols.emplace(std::move(key), address);
-    return address;
+    return SymbolResult::Success(address);
 }
 
-void JitRuntimeBindings::Shutdown()
+#define JIT_RUNTIME_FUNCTION(name, type, symbol, required) \
+    Result<type, RuntimeError> JitRuntimeBindings::Get##name() \
+    { \
+        if (!initialized) { \
+            return Result<type, RuntimeError>::Failure({RuntimeErrorKind::NotInitialized}); \
+        } \
+        if (name) { \
+            return Result<type, RuntimeError>::Success(name); \
+        } \
+        auto result = Resolve(symbol); \
+        if (!result) { \
+            return Result<type, RuntimeError>::Failure(std::move(result).Error()); \
+        } \
+        name = reinterpret_cast<type>(result.Value()); \
+        return Result<type, RuntimeError>::Success(name); \
+    }
+#include "RuntimeFunctions.inc"
+#undef JIT_RUNTIME_FUNCTION
+
+const char* GetRuntimeErrorMessage(RuntimeErrorKind kind) noexcept
+{
+    switch (kind) {
+        case RuntimeErrorKind::AlreadyInitialized: return "runtime bindings are already initialized or could not be shut down";
+        case RuntimeErrorKind::MissingRuntimeConfig: return "a runtime library path and owner runtime parameters are required";
+        case RuntimeErrorKind::EmptyLibraryPath: return "native library path is empty";
+        case RuntimeErrorKind::EmptyLibraryBasename: return "native library basename is empty";
+        case RuntimeErrorKind::DuplicateLibraryBasename: return "native library basenames must be distinct";
+        case RuntimeErrorKind::RuntimeOpenFailed: return "cannot load Cangjie runtime";
+        case RuntimeErrorKind::RequiredSymbolMissing: return "missing runtime symbol";
+        case RuntimeErrorKind::InitializationFailed: return "InitCJRuntime failed";
+        case RuntimeErrorKind::LibraryLoadFailed: return "LoadCJLibraryWithInit failed";
+        case RuntimeErrorKind::PackageLibraryNotFound: return "package shared library not found";
+        case RuntimeErrorKind::NotInitialized: return "runtime bindings are not initialized";
+        case RuntimeErrorKind::InvalidSymbolName: return "invalid symbol name";
+        case RuntimeErrorKind::SymbolNotFound: return "symbol not found";
+        case RuntimeErrorKind::FinalizationSymbolMissing: return "runtime finalization symbol is missing";
+        case RuntimeErrorKind::FinalizationFailed: return "runtime finalization failed";
+        case RuntimeErrorKind::UnloadSymbolMissing: return "library unload symbol is missing";
+        case RuntimeErrorKind::LibraryUnloadFailed: return "library unload failed";
+        case RuntimeErrorKind::RuntimeCloseFailed: return "runtime library close failed";
+    }
+    return "unknown runtime error";
+}
+
+std::string FormatRuntimeError(const RuntimeError& error)
+{
+    auto format = [](RuntimeErrorKind kind, int code, const std::string& detail) {
+        std::string message = GetRuntimeErrorMessage(kind);
+        if (!detail.empty()) {
+            message += ": " + detail;
+        }
+        if (code != 0) {
+            message += " (" + std::to_string(code) + ")";
+        }
+        return message;
+    };
+    auto message = format(error.kind, error.code, error.detail);
+    if (error.cleanup) {
+        message += "; runtime cleanup failed: " +
+            format(error.cleanup->kind, error.cleanup->code, error.cleanup->detail);
+    }
+    return message;
+}
+
+Result<void, RuntimeError> JitRuntimeBindings::Close()
 {
     if (!runtime) {
-        return;
+        closeFailed = false;
+        return Result<void, RuntimeError>::Success();
     }
+    closeFailed = true;
     initialized = false;
-    if (ownsRuntime) {
-        auto fini = symbols.find("FiniCJRuntime");
-        if (fini == symbols.end() || reinterpret_cast<FiniRuntime>(fini->second)() != 0) {
-            std::fprintf(stderr, "JIT runtime bindings: failed to finish Cangjie runtime\n");
-            return; // Do not unload a runtime that could still be active.
-        }
-        ownsRuntime = false;
+    auto finalization = FinalizeRuntime();
+    if (!finalization) {
+        return finalization;
     }
-    // Keep library TypeInfos mapped until the owned runtime has stopped its
-    // collector. Unreachable objects can still be visited during shutdown.
-    auto unload = symbols.find("UnloadCJLibrary");
+    auto unload = UnloadLibraries();
+    if (!unload) {
+        return unload;
+    }
+    if (dlclose(runtime) != 0) {
+        const char* error = dlerror();
+        return Result<void, RuntimeError>::Failure(
+            {RuntimeErrorKind::RuntimeCloseFailed, 0, error ? error : "unknown dynamic loader error"});
+    }
+    runtime = nullptr;
+#define JIT_RUNTIME_FUNCTION(name, type, symbol, required) name = nullptr;
+#include "RuntimeFunctions.inc"
+#undef JIT_RUNTIME_FUNCTION
+    symbols.clear();
+    runtimeDirectory.clear();
+    importPaths.clear();
+    librarySearchPaths.clear();
+    closeFailed = false;
+    return Result<void, RuntimeError>::Success();
+}
+
+Result<void, RuntimeError> JitRuntimeBindings::FinalizeRuntime()
+{
+    if (!ownsRuntime) {
+        return Result<void, RuntimeError>::Success();
+    }
+    if (!FiniRuntime) {
+        return Result<void, RuntimeError>::Failure({RuntimeErrorKind::FinalizationSymbolMissing, 0, {}});
+    }
+    const auto code = FiniRuntime();
+    if (code != 0) {
+        return Result<void, RuntimeError>::Failure({RuntimeErrorKind::FinalizationFailed, code, {}});
+    }
+    ownsRuntime = false;
+    return Result<void, RuntimeError>::Success();
+}
+
+Result<void, RuntimeError> JitRuntimeBindings::UnloadLibraries()
+{
+    // Keep library TypeInfos mapped until the owned runtime has stopped its collector.
     while (!libraries.empty()) {
-        if (unload == symbols.end() || reinterpret_cast<LibraryOperation>(unload->second)(libraries.back().c_str()) != 0) {
-            std::fprintf(stderr, "JIT runtime bindings: failed to unload %s\n", libraries.back().c_str());
-            return; // Retain the runtime and remaining handles rather than invalidate live code.
+        if (!UnloadLibrary) {
+            return Result<void, RuntimeError>::Failure({RuntimeErrorKind::UnloadSymbolMissing, 0, libraries.back()});
+        }
+        const auto code = UnloadLibrary(libraries.back().c_str());
+        if (code != 0) {
+            return Result<void, RuntimeError>::Failure({RuntimeErrorKind::LibraryUnloadFailed, code, libraries.back()});
         }
         libraries.pop_back();
     }
-    symbols.clear();
-    if (dlclose(runtime) == 0) {
-        runtime = nullptr;
-    } else {
-        const char* error = dlerror();
-        std::fprintf(stderr, "JIT runtime bindings: failed to close runtime: %s\n", error ? error : "unknown error");
-    }
+    return Result<void, RuntimeError>::Success();
 }
 } // namespace Cangjie::JIT::X86_64

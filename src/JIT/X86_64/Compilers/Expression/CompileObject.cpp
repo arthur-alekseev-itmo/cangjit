@@ -8,8 +8,7 @@
 
 #include <cstdint>
 #include <limits>
-#include <string_view>
-#include <variant>
+#include <utility>
 #include <vector>
 
 #include "../Context/GlobalContext.h"
@@ -23,33 +22,36 @@ namespace Cangjie::JIT::X86_64 {
 namespace {
 namespace x86 = asmjit::x86;
 
-void* Resolve(FunctionContext& context, const char* name)
+void* Resolve(FunctionContext& context, SymbolResult result)
 {
-    auto result = context.GetGlobalContext().GetRuntimeBindings().Resolve(name);
-    auto* address = std::get_if<void*>(&result);
-    if (!address || !*address) {
+    if (!result) {
         context.Fail(JitFailureKind::UnresolvedSymbol);
         return nullptr;
     }
-    return *address;
+    return result.Value();
 }
 
-const char* AllocationSymbol(const CHIR::ClassDef& def, bool local)
+struct AllocationFunction {
+    SymbolResult address;
+    bool pinned;
+};
+
+AllocationFunction SelectAllocationFunction(JitRuntimeBindings& bindings, const CHIR::ClassDef& def, bool local)
 {
     if (def.GetFinalizer()) {
-        return local ? "CJ_MCC_NewLocalObject" : "CJ_MCC_NewFinalizer";
+        return {local ? bindings.GetNewLocalObject() : bindings.GetNewFinalizer(), false};
     }
     const auto& package = def.GetPackageName();
     const auto& name = def.GetSrcCodeIdentifier();
     if (package == REF_PACKAGE_NAME && name == STD_LIB_WEAK_REF) {
-        return local ? "CJ_MCC_NewLocalWeakRefObject" : "CJ_MCC_NewWeakRefObject";
+        return {local ? bindings.GetNewLocalWeakRefObject() : bindings.GetNewWeakRefObject(), false};
     }
     if ((package == CORE_PACKAGE_NAME && name == STD_LIB_FUTURE) ||
         (package == SYNC_PACKAGE_NAME &&
             (name == STD_LIB_MONITOR || name == STD_LIB_MUTEX || name == STD_LIB_WAIT_QUEUE))) {
-        return "CJ_MCC_NewPinnedObject";
+        return {bindings.GetNewPinnedObject(), true};
     }
-    return local ? "CJ_MCC_NewLocalObject" : "CJ_MCC_NewObject";
+    return {local ? bindings.GetNewLocalObject() : bindings.GetNewObject(), false};
 }
 
 void CompileAllocation(FunctionContext& context, const CHIR::AllocateBase& expression,
@@ -69,17 +71,18 @@ void CompileAllocation(FunctionContext& context, const CHIR::AllocateBase& expre
         context.Fail(JitFailureKind::UnsupportedAllocation, expression.GetExprKind());
         return;
     }
-    if (!context.GetGlobalContext().GetRuntimeBindings().EnsureStandardPackage(def->GetPackageName()).empty()) {
+    if (!context.GetGlobalContext().GetRuntimeBindings().EnsurePackage(def->GetPackageName())) {
         context.Fail(JitFailureKind::UnresolvedSymbol, expression.GetExprKind());
         return;
     }
     const bool local = type->IsLocalRegion();
 
     const bool dynamic = type->IsGenericRelated();
-    auto* typeInfo = dynamic ? nullptr : context.GetConcreteTypeInfo(*type);
-    auto* sizeAddress = Resolve(context, "_ZNK12MapleRuntime8TypeInfo15GetInstanceSizeEv");
-    const std::string_view allocationSymbol = AllocationSymbol(*def, local);
-    auto* allocateAddress = Resolve(context, allocationSymbol.data());
+    auto* typeInfo = dynamic ? nullptr : context.GetTypeInfoEmitter().GetConcreteTypeInfo(*type);
+    auto& bindings = context.GetGlobalContext().GetRuntimeBindings();
+    auto* sizeAddress = Resolve(context, bindings.GetTypeInstanceSize());
+    auto allocation = SelectAllocationFunction(bindings, *def, local);
+    auto* allocateAddress = Resolve(context, std::move(allocation.address));
     if ((!dynamic && !typeInfo) || !sizeAddress || !allocateAddress) {
         context.Fail(JitFailureKind::UnresolvedSymbol, expression.GetExprKind());
         return;
@@ -87,7 +90,7 @@ void CompileAllocation(FunctionContext& context, const CHIR::AllocateBase& expre
     using GetSize = uint32_t (*)(const void*);
     // Runtime expects the eight-byte header plus the payload rounded to eight bytes.
     const uint64_t payload = dynamic ? 0 : reinterpret_cast<GetSize>(sizeAddress)(typeInfo);
-    const bool pinned = allocationSymbol == "CJ_MCC_NewPinnedObject";
+    const bool pinned = allocation.pinned;
     const uint64_t size = ((payload + 7) & ~uint64_t{7}) + 8;
     if (size > std::numeric_limits<uint32_t>::max()) {
         context.Fail(JitFailureKind::UnsupportedAllocation, expression.GetExprKind());
@@ -118,7 +121,7 @@ void CompileAllocation(FunctionContext& context, const CHIR::AllocateBase& expre
 
     auto& assembler = context.GetAssembler();
     if (dynamic) {
-        if (!context.LoadTypeInfo(*type, x86::rax)) {
+        if (!context.GetTypeInfoEmitter().LoadTypeInfo(*type, x86::rax)) {
             return;
         }
         MemoryUtils::ReserveStack(context, 16);
@@ -142,7 +145,7 @@ void CompileAllocation(FunctionContext& context, const CHIR::AllocateBase& expre
     const auto callStart = assembler.offset();
     assembler.call(x86::r11);
     const auto callEnd = assembler.offset();
-    if (!context.RecordSafepoint(expression)) {
+    if (!context.GetSafepointRecorder().Record(expression)) {
         return;
     }
     if (dynamic) {
@@ -156,7 +159,7 @@ void CompileAllocation(FunctionContext& context, const CHIR::AllocateBase& expre
         assembler.mov(x86::qword_ptr(x86::rax, static_cast<int32_t>(8 + i * sizeof(uint64_t))), x86::r11);
     }
     if (local && def->GetFinalizer()) {
-        auto* addFinalizer = Resolve(context, "CJ_MCC_AddLocalFinalizer");
+        auto* addFinalizer = Resolve(context, bindings.GetAddLocalFinalizer());
         if (!addFinalizer || !MemoryUtils::LoadValue(context, result, x86::rdi)) {
             return;
         }
@@ -164,21 +167,21 @@ void CompileAllocation(FunctionContext& context, const CHIR::AllocateBase& expre
         assembler.call(x86::r11);
     }
     if (normal && unwind && !context.GetFailure()) {
-        assembler.jmp(context.GetEdgeLabel(normal));
-        context.EmitExceptionLanding(*unwind, callStart, callEnd);
+        assembler.jmp(context.GetLocalFinalizers().GetEdgeLabel(normal));
+        context.GetExceptionLandingEmitter().Emit(*unwind, callStart, callEnd);
     }
 }
 
-void CompileRegion(FunctionContext& context, const CHIR::Expression& expression, const char* name)
+void CompileRegion(FunctionContext& context, const CHIR::Expression& expression, SymbolResult symbol)
 {
-    auto* address = Resolve(context, name);
+    auto* address = Resolve(context, std::move(symbol));
     if (!address) {
         return;
     }
     auto& assembler = context.GetAssembler();
     assembler.long_().mov(x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(address)));
     assembler.call(x86::r11);
-    context.RecordSafepoint(expression);
+    context.GetSafepointRecorder().Record(expression);
 }
 } // namespace
 
@@ -198,11 +201,11 @@ void CompileObjectAllocate(FunctionContext& context, const CHIR::TryAllocate& ex
 
 void CompileLocalRegion(FunctionContext& context, const CHIR::StartRegion& expression)
 {
-    CompileRegion(context, expression, "CJ_MCC_StartLocalRegion");
+    CompileRegion(context, expression, context.GetGlobalContext().GetRuntimeBindings().GetStartLocalRegion());
 }
 
 void CompileLocalRegion(FunctionContext& context, const CHIR::EndRegion& expression)
 {
-    CompileRegion(context, expression, "CJ_MCC_EndLocalRegion");
+    CompileRegion(context, expression, context.GetGlobalContext().GetRuntimeBindings().GetEndLocalRegion());
 }
 } // namespace Cangjie::JIT::X86_64

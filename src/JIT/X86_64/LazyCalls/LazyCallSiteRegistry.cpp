@@ -7,7 +7,6 @@
 #include "LazyCallSiteRegistry.h"
 
 #include <cstdint>
-#include <limits>
 
 namespace Cangjie::JIT::X86_64 {
 bool LazyCallSiteRegistry::Register(
@@ -18,7 +17,6 @@ bool LazyCallSiteRegistry::Register(
         for (const auto& site : pending) {
             if (!caller || !site.callee || site.returnOffset >= codeSize ||
                 site.immediateOffset > codeSize || codeSize - site.immediateOffset < sizeof(uint64_t) ||
-                site.returnOffset > std::numeric_limits<CodeAddress>::max() - caller ||
                 !sites.emplace(caller + site.returnOffset,
                     LazyCallSite{caller, site.immediateOffset, site.callee}).second) {
                 break;

@@ -8,15 +8,36 @@
 #define CANGJIE_JIT_X86_64_UTILS_SYSTEM_V_CALLING_CONVENTION_H
 
 #include <optional>
+#include <cstdint>
+#include <unordered_map>
+#include <vector>
 
-#include "../Types.h"
+#include "../Location.h"
 
 namespace Cangjie::CHIR {
+class Parameter;
+class Type;
 class DynamicDispatch;
 class Function;
 }
 
 namespace Cangjie::JIT::X86_64 {
+struct ParameterPlacement {
+    std::unordered_map<const CHIR::Parameter*, Location> locations;
+    // Types used for native ABI classification.
+    std::unordered_map<const CHIR::Parameter*, const CHIR::Type*> abiParameterTypes;
+    const CHIR::Type* abiReturnType = nullptr;
+    std::optional<Location> sretLocation;
+    std::unordered_map<const CHIR::Parameter*, Location> basePointerLocations;
+    // In Function::GetGenericTypeParams() order, followed by outer and this type info.
+    std::vector<Location> genericTypeInfoLocations;
+    std::optional<Location> outerTypeInfoLocation;
+    std::optional<Location> thisTypeInfoLocation;
+    std::optional<Location> returnLocation;
+    bool indirectReturn = false;
+    uint32_t stackSize = 0;
+};
+
 class SystemVCallingConvention final {
 public:
     SystemVCallingConvention() = delete;

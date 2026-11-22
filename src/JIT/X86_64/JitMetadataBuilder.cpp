@@ -26,7 +26,7 @@ void JitMetadataBuilder::RecordSafepoint(uint32_t pc, uint32_t gcRegisters, std:
 
 size_t JitMetadataBuilder::RecordLandingPad(uint32_t offset, std::vector<uintptr_t> catchTypes)
 {
-    landingPads.emplace_back(offset, std::move(catchTypes));
+    landingPads.push_back({offset, std::move(catchTypes)});
     return landingPads.size() - 1;
 }
 
@@ -35,74 +35,102 @@ void JitMetadataBuilder::RecordCallSite(uint32_t start, uint32_t length, size_t 
     callSites.emplace_back(start, length, landingPad);
 }
 
-JitMetadataBuilder::Result JitMetadataBuilder::Build(uintptr_t metadataAddress, uintptr_t codeAddress,
+JitMetadataBuilder::BuildResult JitMetadataBuilder::Build(uintptr_t metadataAddress, uintptr_t codeAddress,
     uint32_t codeSize) const
 {
-    if (metadataAddress == 0 || (metadataAddress & 3) != 0 || codeAddress < 4 || codeSize == 0) {
-        return std::string("invalid metadata or code address/size");
-    }
-    if (!hasFrame) return std::string("frame information was not recorded");
-    const uintptr_t prefix = codeAddress - 4;
-    int64_t relative;
-    if (metadataAddress >= prefix) {
-        if (metadataAddress - prefix > INT32_MAX) return std::string("descriptor is out of range");
-        relative = static_cast<int64_t>(metadataAddress - prefix);
-    } else {
-        if (prefix - metadataAddress > uint64_t{INT32_MAX} + 1) return std::string("descriptor is out of range");
-        relative = -static_cast<int64_t>(prefix - metadataAddress);
-    }
-    if (relative == 0) return std::string("descriptor overlaps code prefix");
-    std::array<uint8_t, 4> prefixBytes{};
-    for (unsigned i = 0; i < 4; ++i) prefixBytes[i] = static_cast<uint8_t>(static_cast<uint32_t>(relative) >> (8 * i));
+    auto prefix = BuildPrefix(metadataAddress, codeAddress, codeSize);
+    if (!prefix) return BuildResult::Failure(std::move(prefix).Error());
 
     auto points = safepoints;
     std::sort(points.begin(), points.end(), [](const auto& a, const auto& b) { return std::get<0>(a) < std::get<0>(b); });
     auto sites = callSites;
     std::sort(sites.begin(), sites.end());
+    auto error = ValidateMetadataInputs(sites, codeSize);
+    if (!error) return BuildResult::Failure(std::move(error).Error());
+
+    auto map = BuildStackMap(points, codeSize);
+    if (!map) return BuildResult::Failure(std::move(map).Error());
+    auto eh = BuildExceptionTable(sites);
+    if (!eh) return BuildResult::Failure(std::move(eh).Error());
+    auto descriptor = BuildDescriptor(codeSize, map.Value(), eh.Value());
+    if (!descriptor) return BuildResult::Failure(std::move(descriptor).Error());
+    return BuildResult::Success({std::move(descriptor).Value(), prefix.Value()});
+}
+
+JitMetadataBuilder::EncodedPrefix JitMetadataBuilder::BuildPrefix(
+    uintptr_t metadataAddress, uintptr_t codeAddress, uint32_t codeSize) const
+{
+    if (metadataAddress == 0 || (metadataAddress & 3) != 0 || codeAddress < 4 || codeSize == 0) {
+        return EncodedPrefix::Failure("invalid metadata or code address/size");
+    }
+    if (!hasFrame) return EncodedPrefix::Failure("frame information was not recorded");
+    const uintptr_t prefix = codeAddress - 4;
+    int64_t relative;
+    if (metadataAddress >= prefix) {
+        if (metadataAddress - prefix > INT32_MAX) return EncodedPrefix::Failure("descriptor is out of range");
+        relative = static_cast<int64_t>(metadataAddress - prefix);
+    } else {
+        if (prefix - metadataAddress > uint64_t{INT32_MAX} + 1) return EncodedPrefix::Failure("descriptor is out of range");
+        relative = -static_cast<int64_t>(prefix - metadataAddress);
+    }
+    if (relative == 0) return EncodedPrefix::Failure("descriptor overlaps code prefix");
+    std::array<uint8_t, 4> prefixBytes{};
+    for (unsigned i = 0; i < 4; ++i) prefixBytes[i] = static_cast<uint8_t>(static_cast<uint32_t>(relative) >> (8 * i));
+
+    return EncodedPrefix::Success(prefixBytes);
+}
+
+Result<void, std::string> JitMetadataBuilder::ValidateMetadataInputs(const std::vector<CallSite>& sites, uint32_t codeSize) const
+{
     uint64_t end = 0;
     for (const auto& [start, length, pad] : sites) {
         if (length == 0 || start < end || uint64_t{start} + length > codeSize || pad >= landingPads.size()) {
-            return std::string("invalid or overlapping call sites");
+            return Result<void, std::string>::Failure("invalid or overlapping call sites");
         }
         end = uint64_t{start} + length;
-        if (landingPads[pad].first == 0 || landingPads[pad].first >= codeSize) {
-            return std::string("invalid landing pad offset");
+        if (landingPads[pad].offset == 0 || landingPads[pad].offset >= codeSize) {
+            return Result<void, std::string>::Failure("invalid landing pad offset");
         }
     }
     for (const auto* text : {&name, &directory, &filename}) {
-        if (text->find_first_of(",\0", 0, 2) != std::string::npos) return std::string("invalid stack trace string");
+        if (text->find_first_of(",\0", 0, 2) != std::string::npos) return Result<void, std::string>::Failure("invalid stack trace string");
     }
 
+    return Result<void, std::string>::Success();
+}
+
+JitMetadataBuilder::EncodedBytes JitMetadataBuilder::BuildStackMap(std::vector<Safepoint>& points, uint32_t codeSize) const
+{
     // Table indices are one based. Each root set becomes a row; sharing is
     // unnecessary and preserving root order makes derived pairs unambiguous.
     std::vector<uint32_t> regs;
     std::vector<std::vector<int32_t>> slots;
     std::vector<uint32_t> lines;
-    std::vector<std::pair<uint32_t, uint32_t>> derivatives;
+    std::vector<RootIndices> derivatives;
     using Row = std::array<uint32_t, 7>;
     std::vector<Row> rows;
-    auto addRoots = [&](const Roots& roots) -> std::pair<uint32_t, uint32_t> {
+    auto addRoots = [&](const Roots& roots) -> RootIndices {
         uint32_t reg = 0, slot = 0;
-        if (roots.first != 0) { regs.push_back(roots.first); reg = static_cast<uint32_t>(regs.size()); }
-        if (!roots.second.empty()) { slots.push_back(roots.second); slot = static_cast<uint32_t>(slots.size()); }
+        if (roots.registers != 0) { regs.push_back(roots.registers); reg = static_cast<uint32_t>(regs.size()); }
+        if (!roots.slots.empty()) { slots.push_back(roots.slots); slot = static_cast<uint32_t>(slots.size()); }
         return {reg, slot};
     };
     uint32_t lastPc = 0;
     bool first = true;
     for (auto& point : points) {
         auto& [pc, gc, stack, line, derived] = point;
-        if (pc > codeSize || (!first && pc == lastPc)) return std::string("invalid or duplicate safepoint PC");
+        if (pc > codeSize || (!first && pc == lastPc)) return EncodedBytes::Failure("invalid or duplicate safepoint PC");
         first = false;
         lastPc = pc;
-        if (!stackGrowth && (stack.first != 0 || !stack.second.empty())) return std::string("stack roots require stack growth");
+        if (!stackGrowth && (stack.registers != 0 || !stack.slots.empty())) return EncodedBytes::Failure("stack roots require stack growth");
         auto normalize = [](Roots& roots) {
-            std::sort(roots.second.begin(), roots.second.end(), std::greater<int32_t>());
-            return std::adjacent_find(roots.second.begin(), roots.second.end()) == roots.second.end() &&
-                std::all_of(roots.second.begin(), roots.second.end(), [](int32_t n) { return n % 8 == 0; });
+            std::sort(roots.slots.begin(), roots.slots.end(), std::greater<int32_t>());
+            return std::adjacent_find(roots.slots.begin(), roots.slots.end()) == roots.slots.end() &&
+                std::all_of(roots.slots.begin(), roots.slots.end(), [](int32_t n) { return n % 8 == 0; });
         };
-        if (!normalize(gc) || !normalize(stack)) return std::string("invalid root slots");
-        size_t baseCount = static_cast<size_t>(__builtin_popcount(gc.first & 0xffffu)) + gc.second.size();
-        if (!derived.empty() && derived.size() != baseCount) return std::string("derived roots do not match bases");
+        if (!normalize(gc) || !normalize(stack)) return EncodedBytes::Failure("invalid root slots");
+        size_t baseCount = static_cast<size_t>(__builtin_popcount(gc.registers & 0xffffu)) + gc.slots.size();
+        if (!derived.empty() && derived.size() != baseCount) return EncodedBytes::Failure("derived roots do not match bases");
         auto gcIdx = addRoots(gc);
         auto stackIdx = addRoots(stack);
         lines.push_back(line);
@@ -110,12 +138,12 @@ JitMetadataBuilder::Result JitMetadataBuilder::Build(uintptr_t metadataAddress, 
         if (!derived.empty()) {
             derivedIdx = static_cast<uint32_t>(derivatives.size() + 1);
             for (auto& d : derived) {
-                if (!normalize(d)) return std::string("invalid derived slots");
+                if (!normalize(d)) return EncodedBytes::Failure("invalid derived slots");
                 derivatives.push_back(addRoots(d));
             }
         }
-        rows.push_back({pc, gcIdx.first, gcIdx.second, static_cast<uint32_t>(lines.size()), derivedIdx,
-            stackIdx.first, stackIdx.second});
+        rows.push_back({pc, gcIdx.registers, gcIdx.slots, static_cast<uint32_t>(lines.size()), derivedIdx,
+            stackIdx.registers, stackIdx.slots});
     }
     auto bitsNeeded = [](uint32_t value) -> uint32_t {
         return value == 0 ? 0 : 32 - static_cast<uint32_t>(__builtin_clz(value));
@@ -136,7 +164,7 @@ JitMetadataBuilder::Result JitMetadataBuilder::Build(uintptr_t metadataAddress, 
     for (auto l : lines) lineBits = std::max(lineBits, bitsNeeded(l));
     for (const auto& s : slots) {
         int64_t width = (int64_t{s.front()} - s.back()) / 8 + 1;
-        if (width > UINT32_MAX) return std::string("slot bitmap too large");
+        if (width > UINT32_MAX) return EncodedBytes::Failure("slot bitmap too large");
         slotBits = std::max(slotBits, static_cast<uint32_t>(width));
     }
     std::vector<uint8_t> map;
@@ -183,10 +211,15 @@ JitMetadataBuilder::Result JitMetadataBuilder::Build(uintptr_t metadataAddress, 
     var(static_cast<uint32_t>(lines.size())); var(lineBits);
     for (auto l : lines) writeBits(l, lineBits);
     var(static_cast<uint32_t>(derivatives.size()));
-    for (auto d : derivatives) { writeBits(d.first, regIndexBits); writeBits(d.second, slotIndexBits); }
+    for (auto d : derivatives) { writeBits(d.registers, regIndexBits); writeBits(d.slots, slotIndexBits); }
     // Runtime bit reads may access four bytes beyond the final field.
     map.resize(map.size() + 5, 0);
 
+    return EncodedBytes::Success(std::move(map));
+}
+
+JitMetadataBuilder::EncodedBytes JitMetadataBuilder::BuildExceptionTable(const std::vector<CallSite>& sites) const
+{
     std::vector<uint8_t> eh, callTable, actions;
     std::vector<uintptr_t> types;
     auto uleb = [](std::vector<uint8_t>& out, uint64_t v) {
@@ -197,7 +230,7 @@ JitMetadataBuilder::Result JitMetadataBuilder::Build(uintptr_t metadataAddress, 
         uint64_t action = catches.empty() ? 0 : actions.size() + 1;
         uleb(callTable, start); uleb(callTable, length); uleb(callTable, offset); uleb(callTable, action);
         for (size_t i = 0; i < catches.size(); ++i) {
-            if (types.size() == 255) return std::string("too many exception types");
+            if (types.size() == 255) return EncodedBytes::Failure("too many exception types");
             types.push_back(catches[i]);
             actions.push_back(static_cast<uint8_t>(types.size()));
             actions.push_back(i + 1 == catches.size() ? 0 : 1);
@@ -217,6 +250,12 @@ JitMetadataBuilder::Result JitMetadataBuilder::Build(uintptr_t metadataAddress, 
         eh.insert(eh.end(), tail.begin(), tail.end());
     }
 
+    return EncodedBytes::Success(std::move(eh));
+}
+
+JitMetadataBuilder::EncodedBytes JitMetadataBuilder::BuildDescriptor(uint32_t codeSize,
+    const std::vector<uint8_t>& map, const std::vector<uint8_t>& eh) const
+{
     // Descriptor followed by the trace flag, dictionary and encoded strings.
     // One dictionary entry per nonempty string avoids any mangling assumptions.
     std::vector<uint8_t> result(28, 0);
@@ -246,14 +285,14 @@ JitMetadataBuilder::Result JitMetadataBuilder::Build(uintptr_t metadataAddress, 
     result.push_back(0);
     put32(4, codeSize); put32(8, offsets[0]); put32(12, offsets[1]); put32(16, offsets[2]);
     put32(20, static_cast<uint32_t>(dict));
-    if (result.size() > INT32_MAX) return std::string("metadata too large");
+    if (result.size() > INT32_MAX) return EncodedBytes::Failure("metadata too large");
     put32(0, static_cast<uint32_t>(result.size()));
     result.insert(result.end(), map.begin(), map.end());
     if (!eh.empty()) {
-        if (result.size() > INT32_MAX) return std::string("metadata too large");
+        if (result.size() > INT32_MAX) return EncodedBytes::Failure("metadata too large");
         put32(24, static_cast<uint32_t>(result.size() - 24));
         result.insert(result.end(), eh.begin(), eh.end());
     }
-    return std::make_pair(std::move(result), prefixBytes);
+    return EncodedBytes::Success(std::move(result));
 }
 } // namespace Cangjie::JIT::X86_64

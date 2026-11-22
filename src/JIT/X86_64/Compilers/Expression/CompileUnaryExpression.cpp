@@ -29,6 +29,23 @@ void CompileUnaryExpression::Compile(FunctionContext& ctx, const CHIR::UnaryExpr
     const auto* type = operand->GetType();
     const auto width = RegisterUtils::IntegerWidth(*type);
     const auto kind = expr.GetOpKind();
+    const bool floating = type->GetTypeKind() == CHIR::Type::TYPE_FLOAT32 ||
+        type->GetTypeKind() == CHIR::Type::TYPE_FLOAT64;
+    if (floating && kind == K::NEG) {
+        if (!MemoryUtils::LoadValue(ctx, operand, asmjit::x86::rax)) {
+            return;
+        }
+        auto& a = ctx.GetAssembler();
+        const uint64_t sign = type->GetTypeKind() == CHIR::Type::TYPE_FLOAT32
+            ? uint64_t{1} << 31 : uint64_t{1} << 63;
+        a.mov(asmjit::x86::rcx, asmjit::imm(sign));
+        a.xor_(asmjit::x86::rax, asmjit::x86::rcx);
+        MemoryUtils::StoreValue(ctx, result, asmjit::x86::rax);
+        if (normal && !ctx.GetFailure()) {
+            a.jmp(ctx.GetLocalFinalizers().GetEdgeLabel(normal));
+        }
+        return;
+    }
     if ((kind == K::NOT && !type->IsBoolean()) ||
         ((kind == K::NEG || kind == K::BITNOT) && !width) ||
         (kind != K::NOT && kind != K::NEG && kind != K::BITNOT)) {
@@ -94,7 +111,7 @@ void CompileUnaryExpression::Compile(FunctionContext& ctx, const CHIR::UnaryExpr
     }
     MemoryUtils::StoreValue(ctx, result, asmjit::x86::rax);
     if (normal && !ctx.GetFailure()) {
-        a.jmp(ctx.GetEdgeLabel(normal));
+        a.jmp(ctx.GetLocalFinalizers().GetEdgeLabel(normal));
     }
 }
 } // namespace Cangjie::JIT::X86_64

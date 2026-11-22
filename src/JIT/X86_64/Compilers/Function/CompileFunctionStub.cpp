@@ -40,11 +40,11 @@ CodeAddress ResolveAndPatch(GlobalContext* context, FunctionRecord* record, Code
         const auto* found = context->GetLazyCallSiteRegistry().Find(returnAddress);
         const auto site = found && found->callee == record ? std::optional<LazyCallSite>(*found) : std::nullopt;
         auto result = context->GetFunctionResolver().Resolve(*record, Materialize, context);
-        if (const auto* address = std::get_if<CodeAddress>(&result)) {
+        if (result) {
             if (site) {
                 auto* allocator = context->GetRuntime().allocator();
                 JitAllocator::Span span;
-                const uint64_t target = *address;
+                const uint64_t target = result.Value();
                 if (allocator->query(span, reinterpret_cast<void*>(site->caller)) != kErrorOk ||
                     reinterpret_cast<CodeAddress>(span.rx()) != site->caller ||
                     allocator->write(span, site->immediateOffset, &target, sizeof(target)) != kErrorOk) {
@@ -52,10 +52,9 @@ CodeAddress ResolveAndPatch(GlobalContext* context, FunctionRecord* record, Code
                     std::abort();
                 }
             }
-            return *address;
+            return result.Value();
         }
-        std::fprintf(stderr, "JIT lazy compilation failed: %s\n",
-            std::get<CompilationError>(result).message.c_str());
+        std::fprintf(stderr, "JIT lazy compilation failed: %s\n", result.Error().message.c_str());
     } catch (...) {
         std::fputs("JIT lazy compilation failed with an exception\n", stderr);
     }
@@ -145,6 +144,7 @@ private:
         ok = ok && error == kErrorOk;
     }
 
+    // Build a runtime frame and save the incoming integer and SIMD argument registers.
     void SaveArguments()
     {
         Emit(a.push(rbp));
@@ -170,6 +170,7 @@ private:
         Emit(a.movdqu(xmmword_ptr(rbp, -184), xmm7));
     }
 
+    // Resolve the target, restore the original arguments, then tail-jump to it.
     void ResolveAndJump(GlobalContext& context, FunctionRecord& record, void* c2nStub, uint32_t& safepoint)
     {
         Emit(a.mov(rdi, reinterpret_cast<uintptr_t>(&context)));
@@ -209,9 +210,8 @@ private:
 void* MakeResolverStub(GlobalContext& context, FunctionRecord& record, std::vector<int32_t> gcSlots,
     std::vector<int32_t> stackSlots)
 {
-    auto symbol = context.GetRuntimeBindings().Resolve("CJ_MCC_C2NStub");
-    const auto* c2nStub = std::get_if<void*>(&symbol);
-    if (!c2nStub || !*c2nStub) {
+    auto symbol = context.GetRuntimeBindings().GetCangjieToNativeStub();
+    if (!symbol) {
         return nullptr;
     }
     auto& runtime = context.GetRuntime();
@@ -222,7 +222,7 @@ void* MakeResolverStub(GlobalContext& context, FunctionRecord& record, std::vect
     Assembler assembler(&code);
     uint32_t safepoint = 0;
     if (assembler.embedUInt32(0) != kErrorOk ||
-        !ResolverStubEmitter(assembler).Emit(context, record, *c2nStub, safepoint) ||
+        !ResolverStubEmitter(assembler).Emit(context, record, symbol.Value(), safepoint) ||
         assembler.offset() <= 4 || assembler.offset() - 4 > UINT32_MAX) {
         return nullptr;
     }
@@ -234,12 +234,11 @@ void* MakeResolverStub(GlobalContext& context, FunctionRecord& record, std::vect
     }
     metadata.RecordSafepoint(safepoint, 0, std::move(gcSlots), 0, std::move(stackSlots), 0, {});
     auto provisional = metadata.Build(0x20000000, 0x10000000, codeSize);
-    const auto* layout = std::get_if<std::pair<std::vector<uint8_t>, std::array<uint8_t, 4>>>(&provisional);
-    if (!layout || assembler.align(AlignMode::kData, 4) != kErrorOk) {
+    if (!provisional || assembler.align(AlignMode::kData, 4) != kErrorOk) {
         return nullptr;
     }
     const auto metadataOffset = assembler.offset();
-    if (assembler.embed(layout->first.data(), layout->first.size()) != kErrorOk) {
+    if (assembler.embed(provisional.Value().descriptor.data(), provisional.Value().descriptor.size()) != kErrorOk) {
         return nullptr;
     }
     void* allocation = nullptr;
@@ -248,13 +247,13 @@ void* MakeResolverStub(GlobalContext& context, FunctionRecord& record, std::vect
     }
     const auto base = reinterpret_cast<CodeAddress>(allocation);
     auto finalMetadata = metadata.Build(base + metadataOffset, base + 4, codeSize);
-    const auto* published = std::get_if<std::pair<std::vector<uint8_t>, std::array<uint8_t, 4>>>(&finalMetadata);
     JitAllocator::Span span;
     auto* allocator = runtime.allocator();
-    if (!published || published->first.size() != layout->first.size() ||
+    if (!finalMetadata || finalMetadata.Value().descriptor.size() != provisional.Value().descriptor.size() ||
         allocator->query(span, allocation) != kErrorOk ||
-        allocator->write(span, metadataOffset, published->first.data(), published->first.size()) != kErrorOk ||
-        allocator->write(span, 0, published->second.data(), published->second.size()) != kErrorOk) {
+        allocator->write(span, metadataOffset, finalMetadata.Value().descriptor.data(),
+            finalMetadata.Value().descriptor.size()) != kErrorOk ||
+        allocator->write(span, 0, finalMetadata.Value().prefix.data(), finalMetadata.Value().prefix.size()) != kErrorOk) {
         runtime.release(allocation);
         return nullptr;
     }
@@ -262,13 +261,9 @@ void* MakeResolverStub(GlobalContext& context, FunctionRecord& record, std::vect
 }
 } // namespace
 
+// See ai-docs/jit-function-stub.md for the frame and resolver flow.
 CodeAddress CompileFunctionStub::Compile(GlobalContext& context, const CHIR::Function* function)
 {
-#if !defined(__x86_64__) || defined(_WIN32)
-    (void)context;
-    (void)function;
-    return 0;
-#else
     std::vector<int32_t> gcSlots;
     std::vector<int32_t> stackSlots;
     if (!function || !SupportedSignature(*function, gcSlots, stackSlots)) {
@@ -279,6 +274,7 @@ CodeAddress CompileFunctionStub::Compile(GlobalContext& context, const CHIR::Fun
         return record.GetEntryStub();
     }
 
+    // The allocation starts with the metadata prefix; the executable entry follows it.
     void* allocation = MakeResolverStub(context, record, std::move(gcSlots), std::move(stackSlots));
     if (!allocation) {
         return 0;
@@ -289,6 +285,5 @@ CodeAddress CompileFunctionStub::Compile(GlobalContext& context, const CHIR::Fun
         return 0;
     }
     return entry;
-#endif
 }
 } // namespace Cangjie::JIT::X86_64

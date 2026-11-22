@@ -17,6 +17,6 @@ void CompileGoTo::Compile(FunctionContext& ctx, const CHIR::GoTo& expr)
         ctx.Fail(JitFailureKind::MissingGoToDestination);
         return;
     }
-    ctx.GetAssembler().jmp(ctx.GetEdgeLabel(destination));
+    ctx.GetAssembler().jmp(ctx.GetLocalFinalizers().GetEdgeLabel(destination));
 }
 } // namespace Cangjie::JIT::X86_64

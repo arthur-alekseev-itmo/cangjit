@@ -24,7 +24,7 @@ public:
 
     const Location& GetLocation(ValueNumeration::Id valueId) const noexcept;
     size_t GetLocationCount() const noexcept;
-    std::optional<size_t> ReserveStackSlots(size_t count) noexcept;
+    size_t ReserveStackSlots(size_t count) noexcept;
     size_t GetStackSlotCount() const noexcept;
     std::optional<size_t> GetAllocationSlot(ValueNumeration::Id valueId) const noexcept;
     void Dump(std::ostream& output) const;

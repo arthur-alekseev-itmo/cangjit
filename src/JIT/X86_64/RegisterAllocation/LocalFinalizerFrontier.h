@@ -9,8 +9,9 @@
 
 #include <string>
 #include <tuple>
-#include <variant>
 #include <vector>
+
+#include "../Types.h"
 
 namespace Cangjie::CHIR {
 class AllocateBase;
@@ -24,7 +25,7 @@ namespace Cangjie::JIT::X86_64 {
 // null first element and non-null predecessor and successor. Edge sites include
 // exceptional edges and must be emitted only on that particular edge.
 using LocalFinalizerSite = std::tuple<const CHIR::Expression*, const CHIR::Block*, const CHIR::Block*>;
-using LocalFinalizerFrontier = std::variant<std::vector<LocalFinalizerSite>, std::string>;
+using LocalFinalizerFrontier = Result<std::vector<LocalFinalizerSite>, std::string>;
 LocalFinalizerFrontier ComputeLocalFinalizerFrontier(
     const CHIR::Function& function, const CHIR::AllocateBase& allocation);
 }

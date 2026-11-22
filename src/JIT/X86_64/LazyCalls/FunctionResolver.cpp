@@ -13,33 +13,34 @@ namespace Cangjie::JIT::X86_64 {
 CompilationResult FunctionResolver::Resolve(FunctionRecord& record, Materialize materialize, void* context) const
 {
     if (record.GetState() == FunctionState::UNINITIALIZED) {
-        return CompilationError{"lazy call entry is not initialized"};
+        return CompilationResult::Failure({"lazy call entry is not initialized"});
     }
     if (record.GetState() == FunctionState::COMPILING) {
-        return CompilationError{"recursive materialization of the same function"};
+        return CompilationResult::Failure({"recursive materialization of the same function"});
     }
     if (record.GetState() == FunctionState::READY) {
-        return record.GetCompiledTarget();
+        return CompilationResult::Success(record.GetCompiledTarget());
     }
     if (record.GetState() == FunctionState::FAILED) {
-        return CompilationError{record.GetError()};
+        return CompilationResult::Failure({record.GetError()});
     }
     if (!materialize) {
-        return CompilationError{"missing function materializer"};
+        return CompilationResult::Failure({"missing function materializer"});
     }
     if (!record.BeginCompilation()) {
-        return CompilationError{"function cannot be materialized"};
+        return CompilationResult::Failure({"function cannot be materialized"});
     }
 
-    CompilationResult result;
     try {
-        try {
-            result = materialize(record.GetFunction(), context);
-        } catch (const std::exception& error) {
-            result = CompilationError{error.what()};
-        } catch (...) {
-            result = CompilationError{"function materializer threw an unknown exception"};
-        }
+        auto result = [&]() -> CompilationResult {
+            try {
+                return materialize(record.GetFunction(), context);
+            } catch (const std::exception& error) {
+                return CompilationResult::Failure({error.what()});
+            } catch (...) {
+                return CompilationResult::Failure({"function materializer threw an unknown exception"});
+            }
+        }();
         return record.CompleteCompilation(std::move(result));
     } catch (...) {
         record.FailCompilation();

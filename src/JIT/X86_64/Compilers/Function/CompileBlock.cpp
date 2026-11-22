@@ -43,7 +43,16 @@ bool IsLocalClassReference(const CHIR::Type* type)
 
 unsigned ScalarWidth(const CHIR::Type* type)
 {
-    return !type ? 0 : type->IsBoolean() ? 8 : IsLocalClassReference(type) ? 64 : RegisterUtils::IntegerWidth(*type);
+    if (!type) {
+        return 0;
+    }
+    if (type->GetTypeKind() == CHIR::Type::TYPE_FLOAT32) {
+        return 32;
+    }
+    if (type->GetTypeKind() == CHIR::Type::TYPE_FLOAT64) {
+        return 64;
+    }
+    return type->IsBoolean() ? 8 : IsLocalClassReference(type) ? 64 : RegisterUtils::IntegerWidth(*type);
 }
 
 bool MatchesReference(const CHIR::Value* reference, const CHIR::Type* type)
@@ -134,15 +143,13 @@ void CompileStore(FunctionContext& context, const CHIR::Store& expression)
         default: context.Fail(JitFailureKind::UnsupportedMemoryAccess); return;
     }
 }
-void* ResolveExceptionSymbol(FunctionContext& context, const char* name)
+void* ResolveExceptionSymbol(FunctionContext& context, SymbolResult symbol)
 {
-    auto symbol = context.GetGlobalContext().GetRuntimeBindings().Resolve(name);
-    auto* address = std::get_if<void*>(&symbol);
-    if (!address || !*address) {
+    if (!symbol) {
         context.Fail(JitFailureKind::UnresolvedSymbol);
         return nullptr;
     }
-    return *address;
+    return symbol.Value();
 }
 
 void CompileRTTI(FunctionContext& context, const CHIR::GetRTTI& expression)
@@ -164,7 +171,7 @@ void CompileRTTI(FunctionContext& context, const CHIR::GetRTTIStatic& expression
         context.Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
         return;
     }
-    if (!context.LoadTypeInfo(*type, asmjit::x86::rax)) {
+    if (!context.GetTypeInfoEmitter().LoadTypeInfo(*type, asmjit::x86::rax)) {
         return;
     }
     MemoryUtils::StoreValue(context, expression.GetResult(), asmjit::x86::rax);
@@ -188,10 +195,11 @@ void CompileInstanceOf(FunctionContext& context, const CHIR::InstanceOf& express
         context.Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
         return;
     }
-    auto* subtype = ResolveExceptionSymbol(context, "CJ_MCC_IsSubType");
-    auto* tupleTest = objectClass->IsAny() ? ResolveExceptionSymbol(context, "CJ_MCC_IsTupleTypeOf") : nullptr;
+    auto& bindings = context.GetGlobalContext().GetRuntimeBindings();
+    auto* subtype = ResolveExceptionSymbol(context, bindings.GetIsSubType());
+    auto* tupleTest = objectClass->IsAny() ? ResolveExceptionSymbol(context, bindings.GetIsTupleTypeOf()) : nullptr;
     if (!subtype || (objectClass->IsAny() && !tupleTest) ||
-        !context.LoadTypeInfo(*targetBase, asmjit::x86::rsi)) {
+        !context.GetTypeInfoEmitter().LoadTypeInfo(*targetBase, asmjit::x86::rsi)) {
         return;
     }
     if (!MemoryUtils::LoadValue(context, object, asmjit::x86::rdi)) {
@@ -234,14 +242,14 @@ void CompileInstanceOf(FunctionContext& context, const CHIR::InstanceOf& express
 
 void CompileGetException(FunctionContext& context, const CHIR::GetException& expression)
 {
-    auto* target = ResolveExceptionSymbol(context, "CJ_MCC_GetExceptionWrapper");
+    auto* target = ResolveExceptionSymbol(context, context.GetGlobalContext().GetRuntimeBindings().GetExceptionWrapper());
     if (!target) {
         return;
     }
     auto& a = context.GetAssembler();
     a.long_().mov(asmjit::x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(target)));
     a.call(asmjit::x86::r11);
-    if (context.RecordSafepoint(expression)) {
+    if (context.GetSafepointRecorder().Record(expression)) {
         MemoryUtils::StoreValue(context, expression.GetResult(), asmjit::x86::rax);
     }
 }
@@ -254,7 +262,7 @@ void CompileBeginCatch(FunctionContext& context, const CHIR::IntrinsicBase& expr
         context.Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
         return;
     }
-    auto* target = ResolveExceptionSymbol(context, "CJ_MCC_PostThrowException");
+    auto* target = ResolveExceptionSymbol(context, context.GetGlobalContext().GetRuntimeBindings().GetPostThrowException());
     if (!target || !MemoryUtils::LoadValue(context, expression.GetOperand(0), asmjit::x86::rdi)) {
         return;
     }
@@ -263,12 +271,12 @@ void CompileBeginCatch(FunctionContext& context, const CHIR::IntrinsicBase& expr
     const auto callStart = a.offset();
     a.call(asmjit::x86::r11);
     const auto callEnd = a.offset();
-    if (context.RecordSafepoint(expression)) {
+    if (context.GetSafepointRecorder().Record(expression)) {
         MemoryUtils::StoreValue(context, expression.GetResult(), asmjit::x86::rax);
     }
     if (normal && unwind && !context.GetFailure()) {
-        a.jmp(context.GetEdgeLabel(normal));
-        context.EmitExceptionLanding(*unwind, callStart, callEnd);
+        a.jmp(context.GetLocalFinalizers().GetEdgeLabel(normal));
+        context.GetExceptionLandingEmitter().Emit(*unwind, callStart, callEnd);
     }
 }
 
@@ -279,7 +287,7 @@ void CompileRaiseException(FunctionContext& context, const CHIR::RaiseException&
         context.Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
         return;
     }
-    auto* target = ResolveExceptionSymbol(context, "CJ_MCC_ThrowException");
+    auto* target = ResolveExceptionSymbol(context, context.GetGlobalContext().GetRuntimeBindings().GetThrowException());
     if (!target || !MemoryUtils::LoadValue(context, value, asmjit::x86::rdi)) {
         return;
     }
@@ -288,12 +296,12 @@ void CompileRaiseException(FunctionContext& context, const CHIR::RaiseException&
     const auto callStart = a.offset();
     a.call(asmjit::x86::r11);
     const auto callEnd = a.offset();
-    if (!context.RecordSafepoint(expression)) {
+    if (!context.GetSafepointRecorder().Record(expression)) {
         return;
     }
     a.ud2();
     if (const auto* block = expression.GetExceptionBlock()) {
-        context.EmitExceptionLanding(*block, callStart, callEnd);
+        context.GetExceptionLandingEmitter().Emit(*block, callStart, callEnd);
     }
 }
 
@@ -301,7 +309,7 @@ void CompileRaiseException(FunctionContext& context, const CHIR::RaiseException&
 
 void CompileBlock::Compile(FunctionContext& context, const CHIR::Block& block)
 {
-    context.SetCurrentBlock(block);
+    context.GetLocalFinalizers().SetCurrentBlock(block);
     context.GetAssembler().bind(context.GetBlockLabel(&block));
     if (context.GetFailure() || context.GetError() != asmjit::kErrorOk) {
         return;
@@ -310,7 +318,7 @@ void CompileBlock::Compile(FunctionContext& context, const CHIR::Block& block)
     for (size_t i = 0; i < expressions.size(); ++i) {
         CompileExpression(context, *expressions[i]);
         if (context.GetFailure() || context.GetError() != asmjit::kErrorOk ||
-            (i + 1 < expressions.size() && !context.EmitFinalizersAfter(*expressions[i], *expressions[i + 1]))) {
+            (i + 1 < expressions.size() && !context.GetLocalFinalizers().EmitAfter(*expressions[i], *expressions[i + 1]))) {
             return;
         }
     }

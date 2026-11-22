@@ -1,0 +1,40 @@
+// Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+// Name, type, exported symbol, required at initialization.
+JIT_RUNTIME_FUNCTION(InitRuntime, decltype(&::InitCJRuntime), "InitCJRuntime", true)
+JIT_RUNTIME_FUNCTION(FiniRuntime, decltype(&::FiniCJRuntime), "FiniCJRuntime", true)
+JIT_RUNTIME_FUNCTION(LoadLibrary, decltype(&::LoadCJLibraryWithInit), "LoadCJLibraryWithInit", true)
+JIT_RUNTIME_FUNCTION(UnloadLibrary, decltype(&::UnloadCJLibrary), "UnloadCJLibrary", true)
+JIT_RUNTIME_FUNCTION(FindSymbol, decltype(&::FindCJSymbol), "FindCJSymbol", true)
+JIT_RUNTIME_FUNCTION(RunTask, decltype(&::RunCJTask), "RunCJTask", true)
+JIT_RUNTIME_FUNCTION(TaskReturn, decltype(&::GetTaskRet), "GetTaskRet", true)
+JIT_RUNTIME_FUNCTION(ReleaseTask, decltype(&::ReleaseHandle), "ReleaseHandle", true)
+JIT_RUNTIME_FUNCTION(NativeToCangjieStub, void*, "CJ_MCC_N2CStub", true)
+JIT_RUNTIME_FUNCTION(ThrowException, void*, "CJ_MCC_ThrowException", true)
+JIT_RUNTIME_FUNCTION(ExceptionWrapper, void*, "CJ_MCC_GetExceptionWrapper", true)
+JIT_RUNTIME_FUNCTION(PostThrowException, void*, "CJ_MCC_PostThrowException", true)
+JIT_RUNTIME_FUNCTION(CangjieToNativeStub, void*, "CJ_MCC_C2NStub", false)
+JIT_RUNTIME_FUNCTION(TypeByName, void*, "CJ_MCC_GetTypeByMangledName", false)
+JIT_RUNTIME_FUNCTION(CreateTypeInfo, void*, "CJ_MCC_GetOrCreateTypeInfo", false)
+JIT_RUNTIME_FUNCTION(RemoveLocalFinalizer, void*, "CJ_MCC_RemoveLocalFinalizer", false)
+JIT_RUNTIME_FUNCTION(MethodOuterTypeInfo, void*, "CJ_MCC_GetMethodOuterTI", false)
+JIT_RUNTIME_FUNCTION(MethodTable, void*, "CJ_MCC_GetMTable", false)
+JIT_RUNTIME_FUNCTION(UpdateVTable, void*, "CJ_MCC_UpdateVMT", false)
+JIT_RUNTIME_FUNCTION(IsSubType, void*, "CJ_MCC_IsSubType", false)
+JIT_RUNTIME_FUNCTION(IsTupleTypeOf, void*, "CJ_MCC_IsTupleTypeOf", false)
+JIT_RUNTIME_FUNCTION(NewLocalObject, void*, "CJ_MCC_NewLocalObject", false)
+JIT_RUNTIME_FUNCTION(NewFinalizer, void*, "CJ_MCC_NewFinalizer", false)
+JIT_RUNTIME_FUNCTION(NewLocalWeakRefObject, void*, "CJ_MCC_NewLocalWeakRefObject", false)
+JIT_RUNTIME_FUNCTION(NewWeakRefObject, void*, "CJ_MCC_NewWeakRefObject", false)
+JIT_RUNTIME_FUNCTION(NewPinnedObject, void*, "CJ_MCC_NewPinnedObject", false)
+JIT_RUNTIME_FUNCTION(NewObject, void*, "CJ_MCC_NewObject", false)
+JIT_RUNTIME_FUNCTION(AddLocalFinalizer, void*, "CJ_MCC_AddLocalFinalizer", false)
+JIT_RUNTIME_FUNCTION(StartLocalRegion, void*, "CJ_MCC_StartLocalRegion", false)
+JIT_RUNTIME_FUNCTION(EndLocalRegion, void*, "CJ_MCC_EndLocalRegion", false)
+JIT_RUNTIME_FUNCTION(TypeInstanceSize, void*, "_ZNK12MapleRuntime8TypeInfo15GetInstanceSizeEv", false)
+JIT_RUNTIME_FUNCTION(CreateOverflowException, void*, "rt$CreateOverflowException_msg", false)
+JIT_RUNTIME_FUNCTION(CreateArithmeticException, void*, "rt$CreateArithmeticException_msg", false)

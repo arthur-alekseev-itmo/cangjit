@@ -64,19 +64,20 @@ bool FunctionRecord::BeginCompilation()
 CompilationResult FunctionRecord::CompleteCompilation(CompilationResult result)
 {
     if (state != FunctionState::COMPILING) {
-        return CompilationError{"function is not being materialized"};
+        return CompilationResult::Failure({"function is not being materialized"});
     }
-    if (const auto* address = std::get_if<CodeAddress>(&result)) {
-        if (*address != 0 && *address != entryStub) {
-            compiledTarget = *address;
+    if (result) {
+        const auto address = result.Value();
+        if (address != 0 && address != entryStub) {
+            compiledTarget = address;
             state = FunctionState::READY;
             return result;
         }
-        result = CompilationError{"function materializer returned an invalid target"};
+        result = CompilationResult::Failure({"function materializer returned an invalid target"});
     }
-    error.swap(std::get<CompilationError>(result).message);
+    error.swap(result.Error().message);
     state = FunctionState::FAILED;
-    return CompilationError{error};
+    return CompilationResult::Failure({error});
 }
 
 void FunctionRecord::FailCompilation() noexcept

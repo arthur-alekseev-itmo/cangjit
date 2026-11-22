@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "cangjie/CHIR/IR/Expression/Expression.h"
@@ -36,6 +37,7 @@ const CHIR::Value* FindStackSlot(const CHIR::Value* value)
             return type && !type->IsClass() ? value : nullptr;
         }
         if (expr->GetExprKind() != CHIR::ExprKind::GET_ELEMENT_REF &&
+            expr->GetExprKind() != CHIR::ExprKind::GET_ELEMENT_BY_NAME &&
             expr->GetExprKind() != CHIR::ExprKind::CLASS_STATIC_CAST) {
             return nullptr;
         }
@@ -63,7 +65,8 @@ bool CollectSlotAddresses(const CHIR::Value* slot, std::vector<const CHIR::Value
                 if (static_cast<const CHIR::Store*>(user)->GetLocation() != address) {
                     return false;
                 }
-            } else if (kind == CHIR::ExprKind::CLASS_STATIC_CAST || kind == CHIR::ExprKind::GET_ELEMENT_REF) {
+            } else if (kind == CHIR::ExprKind::CLASS_STATIC_CAST || kind == CHIR::ExprKind::GET_ELEMENT_REF ||
+                kind == CHIR::ExprKind::GET_ELEMENT_BY_NAME) {
                 const auto* result = user->GetResult();
                 if (!result) {
                     return false;
@@ -86,7 +89,7 @@ LocalFinalizerFrontier ComputeLocalFinalizerFrontier(
     const auto* body = function.GetBody();
     const auto* object = allocation.GetResult();
     if (!body || !body->GetEntryBlock() || !object || !allocation.GetParentBlock()) {
-        return std::string("invalid local finalizer allocation");
+        return LocalFinalizerFrontier::Failure("invalid local finalizer allocation");
     }
 
     // Mirror native CodeGen's representative closure, including trackable
@@ -113,14 +116,14 @@ LocalFinalizerFrontier ComputeLocalFinalizerFrontier(
                 static_cast<const CHIR::Store*>(user)->GetValue() == value) {
                 const auto* slot = FindStackSlot(static_cast<const CHIR::Store*>(user)->GetLocation());
                 if (!slot) {
-                    return std::vector<LocalFinalizerSite>{};
+                    return LocalFinalizerFrontier::Success({});
                 }
                 if (!visitedSlots.insert(slot).second) {
                     continue;
                 }
                 std::vector<const CHIR::Value*> addresses;
                 if (!CollectSlotAddresses(slot, addresses)) {
-                    return std::vector<LocalFinalizerSite>{};
+                    return LocalFinalizerFrontier::Success({});
                 }
                 for (const auto* address : addresses) {
                     addRepresentative(address, false);
@@ -134,7 +137,8 @@ LocalFinalizerFrontier ComputeLocalFinalizerFrontier(
                 continue;
             }
             if (user->GetExprKind() == CHIR::ExprKind::CLASS_STATIC_CAST ||
-                user->GetExprKind() == CHIR::ExprKind::GET_ELEMENT_REF) {
+                user->GetExprKind() == CHIR::ExprKind::GET_ELEMENT_REF ||
+                user->GetExprKind() == CHIR::ExprKind::GET_ELEMENT_BY_NAME) {
                 addRepresentative(user->GetResult(), true);
             }
         }
@@ -150,14 +154,14 @@ LocalFinalizerFrontier ComputeLocalFinalizerFrontier(
     const auto entry = indices.find(body->GetEntryBlock());
     const auto allocationBlock = indices.find(allocation.GetParentBlock());
     if (entry == indices.end() || allocationBlock == indices.end()) {
-        return std::string("local finalizer has no function entry or allocation block");
+        return LocalFinalizerFrontier::Failure("local finalizer has no function entry or allocation block");
     }
     std::vector<std::vector<size_t>> successors(blocks.size()), predecessors(blocks.size());
     for (size_t i = 0; i < blocks.size(); ++i) {
         for (const auto* successor : blocks[i]->GetSuccessors()) {
             const auto found = indices.find(successor);
             if (found == indices.end()) {
-                return std::string("local finalizer successor is outside its function");
+                return LocalFinalizerFrontier::Failure("local finalizer successor is outside its function");
             }
             successors[i].push_back(found->second);
             predecessors[found->second].push_back(i);
@@ -175,19 +179,20 @@ LocalFinalizerFrontier ComputeLocalFinalizerFrontier(
         }
     }
     if (!reachable[allocationBlock->second]) {
-        return std::vector<LocalFinalizerSite>{};
+        return LocalFinalizerFrontier::Success({});
     }
 
-    // Compute dominance so a cleanup never reads an allocation slot on a path
-    // that did not execute the allocation.
-    std::vector<Bits> dominators(blocks.size(), Bits(blocks.size()));
-    for (const auto b : work) {
-        for (const auto other : work) {
-            dominators[b][other] = 1;
+    // A dominated block can still be reached through a failed TryAllocate.
+    // Track whether registration succeeded on every incoming path.
+    std::vector<unsigned char> registered(blocks.size(), 1);
+    registered[entry->second] = 0;
+    const auto edgeAvailable = [&](size_t pred, size_t succ) {
+        if (pred != allocationBlock->second) {
+            return registered[pred] != 0;
         }
-    }
-    std::fill(dominators[entry->second].begin(), dominators[entry->second].end(), 0);
-    dominators[entry->second][entry->second] = 1;
+        return allocation.GetExprKind() != CHIR::ExprKind::TRY_ALLOCATE ||
+            blocks[succ] != static_cast<const CHIR::TryAllocate&>(allocation).GetErrorBlock();
+    };
     bool changed;
     do {
         changed = false;
@@ -195,18 +200,15 @@ LocalFinalizerFrontier ComputeLocalFinalizerFrontier(
             if (b == entry->second) {
                 continue;
             }
-            Bits next(blocks.size(), 1);
+            bool available = true;
             for (const auto pred : predecessors[b]) {
-                if (!reachable[pred]) {
-                    continue;
-                }
-                for (size_t i = 0; i < blocks.size(); ++i) {
-                    next[i] &= dominators[pred][i];
+                if (reachable[pred] && !edgeAvailable(pred, b)) {
+                    available = false;
+                    break;
                 }
             }
-            next[b] = 1;
-            if (next != dominators[b]) {
-                dominators[b] = std::move(next);
+            if (registered[b] != static_cast<unsigned char>(available)) {
+                registered[b] = static_cast<unsigned char>(available);
                 changed = true;
             }
         }
@@ -249,17 +251,6 @@ LocalFinalizerFrontier ComputeLocalFinalizerFrontier(
     const auto anyLive = [](const Bits& bits) {
         return std::any_of(bits.begin(), bits.end(), [](unsigned char value) { return value != 0; });
     };
-    const auto edgeAvailable = [&](size_t pred, size_t succ) {
-        if (!dominators[pred][allocationBlock->second]) {
-            return false;
-        }
-        if (blocks[pred] == allocation.GetParentBlock() &&
-            allocation.GetExprKind() == CHIR::ExprKind::TRY_ALLOCATE &&
-            blocks[succ] == static_cast<const CHIR::TryAllocate&>(allocation).GetErrorBlock()) {
-            return false;
-        }
-        return true;
-    };
     std::vector<LocalFinalizerSite> sites;
     for (const auto b : work) {
         if (!anyLive(liveOut[b])) {
@@ -280,7 +271,7 @@ LocalFinalizerFrontier ComputeLocalFinalizerFrontier(
                     last = expression;
                 }
             }
-            if (!last || !dominators[b][allocationBlock->second]) {
+            if (!last || (b != allocationBlock->second && !registered[b])) {
                 continue;
             }
             if (last != blocks[b]->GetTerminator()) {
@@ -300,6 +291,6 @@ LocalFinalizerFrontier ComputeLocalFinalizerFrontier(
             }
         }
     }
-    return sites;
+    return LocalFinalizerFrontier::Success(std::move(sites));
 }
 } // namespace Cangjie::JIT::X86_64

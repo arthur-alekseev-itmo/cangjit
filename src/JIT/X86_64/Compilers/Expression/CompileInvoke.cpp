@@ -26,15 +26,13 @@ namespace Cangjie::JIT::X86_64 {
 namespace {
 namespace x86 = asmjit::x86;
 
-void* Resolve(FunctionContext& context, const char* name)
+void* Resolve(FunctionContext& context, SymbolResult result)
 {
-    auto result = context.GetGlobalContext().GetRuntimeBindings().Resolve(name);
-    const auto* address = std::get_if<void*>(&result);
-    if (!address || !*address) {
+    if (!result) {
         context.Fail(JitFailureKind::UnresolvedSymbol);
         return nullptr;
     }
-    return *address;
+    return result.Value();
 }
 
 
@@ -73,15 +71,15 @@ bool EmitTarget(FunctionContext& context, const CHIR::DynamicDispatch& expressio
         return true;
     }
 
+    auto& bindings = context.GetGlobalContext().GetRuntimeBindings();
     const auto* intro = expression.GetInstSrcParentCustomTypeOfMethod(context.GetGlobalContext().GetCHIRBuilder());
     const auto* def = intro ? intro->GetClassDef() : nullptr;
-    if (!def || !context.LoadTypeInfo(*intro, x86::rax)) {
+    if (!def || !context.GetTypeInfoEmitter().LoadTypeInfo(*intro, x86::rax)) {
         return false;
     }
     a.mov(x86::qword_ptr(x86::rsp, 24), x86::rax);
-    const bool needOuter = context.GetGlobalContext().NeedsOuterTypeInfo(*intro);
-    auto* outerLookup = needOuter ? Resolve(context, "CJ_MCC_GetMethodOuterTI") : nullptr;
-    if (needOuter && !outerLookup) {
+    auto* outerLookup = Resolve(context, bindings.GetMethodOuterTypeInfo());
+    if (!outerLookup) {
         return false;
     }
     const auto index = expression.GetVirtualMethodOffset();
@@ -90,7 +88,7 @@ bool EmitTarget(FunctionContext& context, const CHIR::DynamicDispatch& expressio
         return false;
     }
     if (def->IsInterface()) {
-        auto* mtable = Resolve(context, "CJ_MCC_GetMTable");
+        auto* mtable = Resolve(context, bindings.GetMethodTable());
         if (!mtable) {
             return false;
         }
@@ -108,7 +106,7 @@ bool EmitTarget(FunctionContext& context, const CHIR::DynamicDispatch& expressio
             context.Fail(JitFailureKind::UnsupportedCall, expression.GetExprKind());
             return false;
         }
-        auto* update = Resolve(context, "CJ_MCC_UpdateVMT");
+        auto* update = Resolve(context, bindings.GetUpdateVTable());
         if (!update) {
             return false;
         }
@@ -127,10 +125,6 @@ bool EmitTarget(FunctionContext& context, const CHIR::DynamicDispatch& expressio
         a.mov(x86::rax, x86::qword_ptr(x86::rax, static_cast<int32_t>(index * sizeof(uint64_t))));
     }
     a.mov(x86::qword_ptr(x86::rsp), x86::rax);
-    if (!needOuter) {
-        a.mov(x86::qword_ptr(x86::rsp, 8), 0);
-        return true;
-    }
     a.mov(x86::rdi, x86::qword_ptr(x86::rsp, 16));
     a.mov(x86::rsi, x86::qword_ptr(x86::rsp, 24));
     a.long_().mov(x86::rdx, asmjit::imm(index));
@@ -240,7 +234,7 @@ void CompileCall(FunctionContext& context, const CHIR::DynamicDispatch& expressi
     const auto callStart = a.offset();
     a.call(x86::r11);
     const auto callEnd = a.offset();
-    if (!context.RecordSafepoint(expression)) {
+    if (!context.GetSafepointRecorder().Record(expression)) {
         return;
     }
     MemoryUtils::ReleaseStack(context, placement->stackSize + typeScratchSize + SCRATCH_SIZE);
@@ -264,8 +258,8 @@ void CompileCall(FunctionContext& context, const CHIR::DynamicDispatch& expressi
         }
     }
     if (normal && unwind && !context.GetFailure()) {
-        a.jmp(context.GetEdgeLabel(normal));
-        context.EmitExceptionLanding(*unwind, callStart, callEnd);
+        a.jmp(context.GetLocalFinalizers().GetEdgeLabel(normal));
+        context.GetExceptionLandingEmitter().Emit(*unwind, callStart, callEnd);
     }
 }
 } // namespace

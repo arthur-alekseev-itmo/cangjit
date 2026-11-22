@@ -7,43 +7,72 @@
 #ifndef CANGJIE_JIT_X86_64_TYPES_H
 #define CANGJIE_JIT_X86_64_TYPES_H
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
-#include <unordered_map>
+#include <utility>
 #include <variant>
-#include <vector>
-
-#include "Location.h"
-
-namespace Cangjie::CHIR {
-class Parameter;
-class Type;
-}
 
 namespace Cangjie::JIT::X86_64 {
-using CodeAddress = uintptr_t;
+template<typename T, typename Err>
+class [[nodiscard]] Result {
+public:
+    static Result Success(T value)
+    {
+        return Result(std::in_place_index<0>, std::move(value));
+    }
 
-struct ParameterPlacement {
-    std::unordered_map<const CHIR::Parameter*, Location> locations;
-    // Types used for native ABI classification.
-    std::unordered_map<const CHIR::Parameter*, const CHIR::Type*> abiParameterTypes;
-    const CHIR::Type* abiReturnType = nullptr;
-    std::optional<Location> sretLocation;
-    std::unordered_map<const CHIR::Parameter*, Location> basePointerLocations;
-    // In Function::GetGenericTypeParams() order, followed by outer and this type info.
-    std::vector<Location> genericTypeInfoLocations;
-    std::optional<Location> outerTypeInfoLocation;
-    std::optional<Location> thisTypeInfoLocation;
-    std::optional<Location> returnLocation;
-    bool indirectReturn = false;
-    uint32_t stackSize = 0;
+    static Result Failure(Err error)
+    {
+        return Result(std::in_place_index<1>, std::move(error));
+    }
+
+    bool HasValue() const noexcept { return value.index() == 0; }
+    explicit operator bool() const noexcept { return HasValue(); }
+    T& Value() & { return std::get<0>(value); }
+    const T& Value() const& { return std::get<0>(value); }
+    T&& Value() && { return std::get<0>(std::move(value)); }
+    Err& Error() & { return std::get<1>(value); }
+    const Err& Error() const& { return std::get<1>(value); }
+    Err&& Error() && { return std::get<1>(std::move(value)); }
+
+private:
+    template<std::size_t Index, typename U>
+    explicit Result(std::in_place_index_t<Index> index, U&& item)
+        : value(index, std::forward<U>(item)) {}
+
+    std::variant<T, Err> value;
 };
 
+template<typename Err>
+class [[nodiscard]] Result<void, Err> {
+public:
+    static Result Success() { return Result(); }
+    static Result Failure(Err error) { return Result(std::move(error)); }
+
+    bool HasValue() const noexcept { return !error.has_value(); }
+    explicit operator bool() const noexcept { return HasValue(); }
+    Err& Error() & { return *error; }
+    const Err& Error() const& { return *error; }
+    Err&& Error() && { return std::move(*error); }
+
+private:
+    Result() = default;
+    explicit Result(Err value) : error(std::move(value)) {}
+
+    std::optional<Err> error;
+};
+
+using CodeAddress = uintptr_t;
+
+
+// External diagnostics can include AsmJit errors as well as JitFailureKind messages.
 struct CompilationError {
     std::string message;
 };
-using CompilationResult = std::variant<CodeAddress, CompilationError>;
+
+using CompilationResult = Result<CodeAddress, CompilationError>;
 } // namespace Cangjie::JIT::X86_64
 
 #endif // CANGJIE_JIT_X86_64_TYPES_H

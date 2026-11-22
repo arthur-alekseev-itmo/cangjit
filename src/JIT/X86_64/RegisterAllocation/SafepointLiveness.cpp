@@ -51,7 +51,7 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
     const auto* body = function.GetBody();
     const size_t count = numbers.GetValueCount();
     if (!body || allocation.GetLocationCount() != count) {
-        return std::string("invalid function or allocation for safepoint liveness");
+        return SafepointLivenessResult::Failure("invalid function or allocation for safepoint liveness");
     }
     // The analysis relies on a value's slot retaining its value after its last
     // ordinary use, e.g. when it is the base of a live derived pointer.
@@ -60,13 +60,13 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
         const auto* slot = allocation.GetLocation(id).AsStack();
         if (!slot || !slots.insert(slot->index).second ||
             !StackFrameUtils::GetSlotOffset(slot->index, allocation.GetStackSlotCount())) {
-            return std::string("safepoint liveness requires distinct valid stack locations");
+            return SafepointLivenessResult::Failure("safepoint liveness requires distinct valid stack locations");
         }
     }
     for (Id id = 0; id < count; ++id) {
         if (auto slot = allocation.GetAllocationSlot(id)) {
             if (!slots.insert(*slot).second || !StackFrameUtils::GetSlotOffset(*slot, allocation.GetStackSlotCount())) {
-                return std::string("invalid or overlapping stack allocation slot");
+                return SafepointLivenessResult::Failure("invalid or overlapping stack allocation slot");
             }
         }
     }
@@ -79,14 +79,14 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
     }
     const auto entry = index.find(body->GetEntryBlock());
     if (entry == index.end()) {
-        return std::string("function has no entry block");
+        return SafepointLivenessResult::Failure("function has no entry block");
     }
     std::vector<std::vector<size_t>> successors(blocks.size()), predecessors(blocks.size());
     for (size_t i = 0; i < blocks.size(); ++i) {
         for (const auto* successor : blocks[i]->GetSuccessors()) {
             auto found = index.find(successor);
             if (found == index.end()) {
-                return std::string("CFG successor outside function");
+                return SafepointLivenessResult::Failure("CFG successor outside function");
             }
             successors[i].push_back(found->second);
             predecessors[found->second].push_back(i);
@@ -105,18 +105,18 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
     }
     auto targetBlock = index.find(target.GetParentBlock());
     if (targetBlock == index.end() || !reachable[targetBlock->second]) {
-        return std::string("safepoint is not in a reachable block");
+        return SafepointLivenessResult::Failure("safepoint is not in a reachable block");
     }
     for (auto b : work) {
         for (const auto* expr : blocks[b]->GetExpressions()) {
             const auto* result = expr->GetResult();
             if (result && !numbers.GetId(result)) {
-                return std::string("expression result is missing from value numeration");
+                return SafepointLivenessResult::Failure("expression result is missing from value numeration");
             }
             for (size_t operand = 0; operand < expr->GetNumOfNonSuccessorOperands(); ++operand) {
                 const auto* value = expr->GetOperand(operand);
                 if (value && (value->IsLocalVar() || value->IsParameter()) && !numbers.GetId(value)) {
-                    return std::string("expression operand is missing from value numeration");
+                    return SafepointLivenessResult::Failure("expression operand is missing from value numeration");
                 }
             }
         }
@@ -211,7 +211,7 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
         }
     }
     if (!found) {
-        return std::string("safepoint expression is absent from its block");
+        return SafepointLivenessResult::Failure("safepoint expression is absent from its block");
     }
     for (const auto* expr : expressions) {
         if (expr == &target) {
@@ -230,7 +230,7 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
         const auto e = index.find(branches.second);
         const auto id = numbers.GetId(target.GetResult());
         if (e != index.end() && id && in[e->second][*id]) {
-            return std::string("try result is live on its exception edge");
+            return SafepointLivenessResult::Failure("try result is live on its exception edge");
         }
     }
 
@@ -346,29 +346,29 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
         std::unordered_set<Id> seen;
         int kind = classify(id, seen);
         if (kind < 0) {
-            return error;
+            return SafepointLivenessResult::Failure(std::move(error));
         }
         if (kind == 1) {
-            stack.second.push_back(offset(id));
+            stack.slots.push_back(offset(id));
         }
     }
     for (auto id : roots) {
-        gc.second.push_back(offset(id));
+        gc.slots.push_back(offset(id));
     }
     auto sortUnique = [](std::vector<int32_t>& values) {
         std::sort(values.begin(), values.end(), std::greater<int32_t>());
         values.erase(std::unique(values.begin(), values.end()), values.end());
     };
-    sortUnique(gc.second);
-    sortUnique(stack.second);
+    sortUnique(gc.slots);
+    sortUnique(stack.slots);
     JitMetadataBuilder::DerivedRoots perRoot;
-    perRoot.reserve(gc.second.size());
-    for (auto slot : gc.second) {
+    perRoot.reserve(gc.slots.size());
+    for (auto slot : gc.slots) {
         auto it = std::find_if(roots.begin(), roots.end(), [&](Id id) { return offset(id) == slot; });
         auto values = derived[*it];
         sortUnique(values);
-        perRoot.emplace_back(0, std::move(values));
+        perRoot.push_back({0, std::move(values)});
     }
-    return SafepointRoots{std::move(gc), std::move(stack), std::move(perRoot)};
+    return SafepointLivenessResult::Success({std::move(gc), std::move(stack), std::move(perRoot)});
 }
 } // namespace Cangjie::JIT::X86_64

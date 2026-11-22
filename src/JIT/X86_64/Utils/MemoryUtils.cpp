@@ -122,17 +122,16 @@ bool MemoryUtils::LoadValue(FunctionContext& context, const CHIR::Value* value, 
             return false;
         }
         if (!context.GetGlobalContext().GetRuntimeBindings()
-                .EnsureStandardPackage(static_cast<const CHIR::GlobalVar*>(value)->GetPackageName()).empty()) {
+                .EnsurePackage(static_cast<const CHIR::GlobalVar*>(value)->GetPackageName())) {
             context.Fail(JitFailureKind::UnresolvedSymbol);
             return false;
         }
         auto resolved = context.GetGlobalContext().GetRuntimeBindings().Resolve(value->GetIdentifierWithoutPrefix());
-        const auto* symbol = std::get_if<void*>(&resolved);
-        if (!symbol || !*symbol) {
+        if (!resolved) {
             context.Fail(JitFailureKind::UnresolvedSymbol);
             return false;
         }
-        const auto address = *symbol;
+        const auto address = resolved.Value();
         if (!address) {
             context.Fail(JitFailureKind::UnresolvedSymbol);
             return false;
@@ -283,7 +282,7 @@ bool MemoryUtils::PlaceTypeInfo(
             context.Fail(JitFailureKind::UnsupportedCallingConvention);
             return false;
         }
-        return context.LoadTypeInfo(*type, *target);
+        return context.GetTypeInfoEmitter().LoadTypeInfo(*type, *target);
     }
     const auto* stack = location.AsIncomingStack();
     if (!stack || stack->index >= stackSize / sizeof(uint64_t) ||
@@ -291,7 +290,7 @@ bool MemoryUtils::PlaceTypeInfo(
         context.Fail(JitFailureKind::UnsupportedCallingConvention);
         return false;
     }
-    if (!context.LoadTypeInfo(*type, asmjit::x86::rax)) {
+    if (!context.GetTypeInfoEmitter().LoadTypeInfo(*type, asmjit::x86::rax)) {
         return false;
     }
     context.GetAssembler().mov(
@@ -310,7 +309,7 @@ std::optional<uint32_t> MemoryUtils::StageTypeInfos(
     const auto size = static_cast<uint32_t>((types.size() * sizeof(uint64_t) + 15) & ~size_t{15});
     ReserveStack(context, size);
     for (size_t i = 0; i < types.size(); ++i) {
-        if (!types[i] || !context.LoadTypeInfo(*types[i], asmjit::x86::rax)) {
+        if (!types[i] || !context.GetTypeInfoEmitter().LoadTypeInfo(*types[i], asmjit::x86::rax)) {
             context.Fail(JitFailureKind::UnsupportedCall);
             return std::nullopt;
         }

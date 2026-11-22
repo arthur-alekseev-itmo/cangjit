@@ -9,9 +9,9 @@
 
 #include <string>
 #include <tuple>
-#include <variant>
 
 #include "../JitMetadataBuilder.h"
+#include "../Types.h"
 #include "RegisterAllocation.h"
 
 namespace Cangjie::CHIR {
@@ -24,7 +24,7 @@ namespace Cangjie::JIT::X86_64 {
 // ordering required by JitMetadataBuilder::RecordSafepoint.
 using SafepointRoots = std::tuple<JitMetadataBuilder::Roots, JitMetadataBuilder::Roots,
     JitMetadataBuilder::DerivedRoots>;
-using SafepointLivenessResult = std::variant<SafepointRoots, std::string>;
+using SafepointLivenessResult = Result<SafepointRoots, std::string>;
 
 // Analyze immediately before expression: arguments are live; its result is not
 // yet initialized. A string means no exact, safe stack map can be emitted.

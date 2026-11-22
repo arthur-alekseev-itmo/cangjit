@@ -29,6 +29,28 @@ void CompileNumericCast::Compile(FunctionContext& context, const CHIR::NumericCa
         context.Fail(JitFailureKind::UnsupportedNumericCast);
         return;
     }
+    const auto sourceKind = sourceType->GetTypeKind();
+    const auto targetKind = targetType->GetTypeKind();
+    const bool sourceFloat = sourceKind == CHIR::Type::TYPE_FLOAT32 || sourceKind == CHIR::Type::TYPE_FLOAT64;
+    const bool targetFloat = targetKind == CHIR::Type::TYPE_FLOAT32 || targetKind == CHIR::Type::TYPE_FLOAT64;
+    if (sourceFloat && targetFloat) {
+        if (!MemoryUtils::LoadFloatValue(context, source, asmjit::x86::xmm0, asmjit::x86::rax)) {
+            return;
+        }
+        auto& assembler = context.GetAssembler();
+        if (sourceKind != targetKind) {
+            if (targetKind == CHIR::Type::TYPE_FLOAT64) {
+                assembler.cvtss2sd(asmjit::x86::xmm0, asmjit::x86::xmm0);
+            } else {
+                assembler.cvtsd2ss(asmjit::x86::xmm0, asmjit::x86::xmm0);
+            }
+        }
+        MemoryUtils::StoreFloatValue(context, result, asmjit::x86::xmm0, asmjit::x86::rax);
+        if (normal && !context.GetFailure()) {
+            assembler.jmp(context.GetLocalFinalizers().GetEdgeLabel(normal));
+        }
+        return;
+    }
     const auto sourceWidth = RegisterUtils::IntegerWidth(*sourceType);
     const auto targetWidth = RegisterUtils::IntegerWidth(*targetType);
     if (!sourceWidth || !targetWidth) {
@@ -93,7 +115,7 @@ void CompileNumericCast::Compile(FunctionContext& context, const CHIR::NumericCa
     RegisterUtils::NormalizeInteger(assembler, asmjit::x86::rax, targetWidth, targetSigned);
     MemoryUtils::StoreValue(context, result, asmjit::x86::rax);
     if (normal && !context.GetFailure()) {
-        assembler.jmp(context.GetEdgeLabel(normal));
+        assembler.jmp(context.GetLocalFinalizers().GetEdgeLabel(normal));
     }
 }
 } // namespace Cangjie::JIT::X86_64
