@@ -11,6 +11,7 @@
 #include <limits>
 #include <utility>
 
+#include "../../RegisterAllocation/LivenessAnalysis.h"
 #include "../../RegisterAllocation/LivenessInterferenceGraphBuilder.h"
 #include "../../RegisterAllocation/TrivialStackRegalloc.h"
 #include "../../RegisterAllocation/ValueNumeration.h"
@@ -60,7 +61,7 @@ void CompileFunction::PrintDebugInfo(const FunctionContext& context) const
     }
     if (globalContext.IsDebugEnabled(FuncPrintMode::LIVENESS)) {
         std::cerr << "[JIT] liveness " << function.GetIdentifier() << '\n';
-        context.GetLivenessAnalysis().Dump(std::cerr, context.GetValueNumeration());
+        context.GetLiveness().Dump(std::cerr, context.GetValueNumeration());
     }
 }
 

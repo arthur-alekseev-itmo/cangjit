@@ -7,13 +7,10 @@
 #ifndef CANGJIE_JIT_X86_64_REGISTER_ALLOCATION_LIVENESS_ANALYSIS_H
 #define CANGJIE_JIT_X86_64_REGISTER_ALLOCATION_LIVENESS_ANALYSIS_H
 
-#include <iosfwd>
-#include <optional>
 #include <unordered_map>
 #include <vector>
 
-#include "InterferenceGraph.h"
-#include "ValueNumeration.h"
+#include "Liveness.h"
 
 namespace Cangjie::CHIR {
 class Block;
@@ -24,20 +21,13 @@ class Function;
 namespace Cangjie::JIT::X86_64 {
 class LivenessAnalysis final {
 public:
-    using Word = InterferenceGraph::BitmapWord;
-
-    static LivenessAnalysis Analyze(const CHIR::Function& function, const ValueNumeration& numeration);
-    static bool Contains(const Word* bitmap, ValueNumeration::Id id) noexcept;
-    static void Transfer(const CHIR::Expression& expression, const ValueNumeration& numeration, Word* live);
-
-    const std::vector<CHIR::Block*>& GetBlocks() const noexcept { return blocks; }
-    std::optional<size_t> GetBlockIndex(const CHIR::Block* block) const noexcept;
-    size_t GetWordCount() const noexcept { return wordsPerBlock; }
-    const Word* GetLiveIn(size_t block) const noexcept;
-    const Word* GetLiveOut(size_t block) const noexcept;
-    void Dump(std::ostream& output, const ValueNumeration& numeration) const;
+    static Liveness Analyze(const CHIR::Function& function, const ValueNumeration& numeration);
 
 private:
+    using Word = Liveness::Word;
+
+    static void Transfer(const CHIR::Expression& expression, const ValueNumeration& numeration, Word* live);
+    Liveness MakeLiveness(const ValueNumeration& numeration);
     void CollectBlocks(const CHIR::Function& function);
     void Compute(const ValueNumeration& numeration);
 

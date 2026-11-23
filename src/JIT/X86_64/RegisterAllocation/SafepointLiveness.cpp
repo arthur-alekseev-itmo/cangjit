@@ -12,7 +12,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "LivenessAnalysis.h"
+#include "Liveness.h"
 #include "../Utils/StackFrameUtils.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
@@ -35,7 +35,7 @@ bool IsObjectType(const CHIR::Type& type)
 } // namespace
 
 SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
-    const ValueNumeration& numbers, const RegisterAllocation& allocation, const LivenessAnalysis& liveness,
+    const ValueNumeration& numbers, const RegisterAllocation& allocation, const Liveness& liveness,
     const CHIR::Expression& target)
 {
     const auto* body = function.GetBody();
@@ -161,25 +161,15 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
 
     const size_t b = *targetBlock;
     Bits initialized = initializedIn[b];
-    std::vector<LivenessAnalysis::Word> live(liveness.GetWordCount());
-    if (!live.empty()) {
-        const auto* liveOut = liveness.GetLiveOut(b);
-        std::copy(liveOut, liveOut + live.size(), live.begin());
-    }
-    bool found = false;
-    const auto expressions = blocks[b]->GetExpressions();
-    for (auto it = expressions.rbegin(); it != expressions.rend(); ++it) {
-        LivenessAnalysis::Transfer(**it, numbers, live.data());
-        if (*it == &target) {
-            found = true;
-            break;
-        }
-    }
-    if (!found) {
+    if (!liveness.ContainsExpression(target)) {
         return SafepointLivenessResult::Failure("safepoint expression is absent from its block");
     }
+    const auto* live = liveness.GetLiveBefore(target);
+    bool found = false;
+    const auto expressions = blocks[b]->GetExpressions();
     for (const auto* expr : expressions) {
         if (expr == &target) {
+            found = true;
             break;
         }
         if (const auto* result = expr->GetResult()) {
@@ -188,13 +178,16 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
             }
         }
     }
+    if (!found) {
+        return SafepointLivenessResult::Failure("safepoint expression is absent from its block");
+    }
     // Ensure a try-result is not used on the exception edge. Such a value is
     // uninitialized even though the ordinary transfer kills the definition.
     const auto branches = target.GetSuccessAndErrorBlocks();
     if (branches.second && target.GetResult()) {
         const auto e = liveness.GetBlockIndex(branches.second);
         const auto id = numbers.GetId(target.GetResult());
-        if (e && id && LivenessAnalysis::Contains(liveness.GetLiveIn(*e), *id)) {
+        if (e && id && Liveness::Contains(liveness.GetLiveIn(branches.second), *id)) {
             return SafepointLivenessResult::Failure("try result is live on its exception edge");
         }
     }
@@ -305,7 +298,7 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
         return 0;
     };
     for (Id id = 0; id < count; ++id) {
-        if (!LivenessAnalysis::Contains(live.data(), id)) {
+        if (!Liveness::Contains(live, id)) {
             continue;
         }
         std::unordered_set<Id> seen;

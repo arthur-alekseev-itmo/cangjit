@@ -6,18 +6,16 @@
 
 #include "LivenessInterferenceGraphBuilder.h"
 
-#include <algorithm>
 #include <cassert>
-#include <vector>
 
-#include "LivenessAnalysis.h"
+#include "Liveness.h"
 #include "ValueNumeration.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
 
 namespace Cangjie::JIT::X86_64 {
 namespace {
-using Word = LivenessAnalysis::Word;
+using Word = Liveness::Word;
 using NodeId = InterferenceGraph::NodeId;
 constexpr size_t BITS_PER_WORD = sizeof(Word) * 8;
 
@@ -55,30 +53,23 @@ void AddClique(InterferenceGraph& graph, const Word* values, size_t wordCount, N
 } // namespace
 
 InterferenceGraph LivenessInterferenceGraphBuilder::Build(const CHIR::Function& function,
-    const ValueNumeration& numeration, const LivenessAnalysis& liveness) const
+    const ValueNumeration& numeration, const Liveness& liveness) const
 {
     const auto nodeCount = numeration.GetValueCount();
     InterferenceGraph graph(nodeCount);
     const auto wordCount = liveness.GetWordCount();
-    std::vector<Word> live(wordCount);
-    const auto& blocks = liveness.GetBlocks();
-    for (size_t block = 0; block < blocks.size(); ++block) {
-        if (wordCount != 0) {
-            const auto* liveOut = liveness.GetLiveOut(block);
-            std::copy(liveOut, liveOut + wordCount, live.begin());
-        }
-        const auto expressions = blocks[block]->GetExpressions();
-        for (auto expression = expressions.rbegin(); expression != expressions.rend(); ++expression) {
-            if (const auto id = numeration.GetId((*expression)->GetResult())) {
-                AddInterferences(graph, *id, live.data(), wordCount, nodeCount);
+    for (const auto* block : liveness.GetBlocks()) {
+        for (size_t i = 0; i < block->GetExpressionsNum(); ++i) {
+            const auto* expression = block->GetExpressionByIdx(i);
+            if (const auto id = numeration.GetId(expression->GetResult())) {
+                AddInterferences(graph, *id, liveness.GetLiveAfter(*expression), wordCount, nodeCount);
             }
-            LivenessAnalysis::Transfer(**expression, numeration, live.data());
         }
     }
     const auto entry = liveness.GetBlockIndex(function.GetBody()->GetEntryBlock());
     assert(entry);
     if (entry) {
-        AddClique(graph, liveness.GetLiveIn(*entry), wordCount, nodeCount);
+        AddClique(graph, liveness.GetLiveIn(function.GetBody()->GetEntryBlock()), wordCount, nodeCount);
     }
     return graph;
 }

@@ -19,7 +19,7 @@
 #include "TypeInfoEmitter.h"
 #include "../../JitMetadataBuilder.h"
 #include "../../LazyCalls/LazyCallSiteRegistry.h"
-#include "../../RegisterAllocation/LivenessAnalysis.h"
+#include "../../RegisterAllocation/Liveness.h"
 #include "../../RegisterAllocation/RegisterAllocation.h"
 #include "../../RegisterAllocation/ValueNumeration.h"
 
@@ -39,7 +39,7 @@ class GlobalContext;
 class FunctionContext final {
 public:
     FunctionContext(GlobalContext& globalContext, const CHIR::Function* function, ValueNumeration valueNumeration,
-        LivenessAnalysis liveness, RegisterAllocation registerAllocation) noexcept;
+        Liveness liveness, RegisterAllocation registerAllocation) noexcept;
     bool Prepare();
 
     GlobalContext& GetGlobalContext() const noexcept;
@@ -62,7 +62,7 @@ public:
     std::vector<PendingLazyCallSite>& GetLazyCallSites() noexcept;
     const std::vector<const CHIR::Function*>& GetFunctionsToStub() const noexcept;
     const ValueNumeration& GetValueNumeration() const noexcept;
-    const LivenessAnalysis& GetLivenessAnalysis() const noexcept { return liveness; }
+    const Liveness& GetLiveness() const noexcept { return liveness; }
     const RegisterAllocation& GetRegisterAllocation() const noexcept;
 
 private:
@@ -98,7 +98,7 @@ private:
     std::vector<const CHIR::Function*> functionsToStub;
     std::vector<PendingLazyCallSite> lazyCallSites;
     ValueNumeration valueNumeration;
-    LivenessAnalysis liveness;
+    Liveness liveness;
     RegisterAllocation registerAllocation;
     size_t hiddenTypeInfoBase = 0;
     size_t hiddenTypeInfoCount = 0;

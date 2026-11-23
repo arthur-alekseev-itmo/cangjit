@@ -16,7 +16,7 @@
 
 namespace Cangjie::JIT::X86_64 {
 FunctionContext::FunctionContext(GlobalContext& globalContext, const CHIR::Function* function,
-    ValueNumeration valueNumeration, LivenessAnalysis liveness, RegisterAllocation registerAllocation) noexcept
+    ValueNumeration valueNumeration, Liveness liveness, RegisterAllocation registerAllocation) noexcept
     : globalContext(globalContext),
       error(asmjit::kErrorOk),
       metadataBuilder(globalContext.IsStackGrowthEnabled()),

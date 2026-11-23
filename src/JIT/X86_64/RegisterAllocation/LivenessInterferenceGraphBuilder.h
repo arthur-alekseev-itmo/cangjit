@@ -14,13 +14,13 @@ class Function;
 }
 
 namespace Cangjie::JIT::X86_64 {
-class LivenessAnalysis;
+class Liveness;
 class ValueNumeration;
 
 class LivenessInterferenceGraphBuilder final {
 public:
     InterferenceGraph Build(const CHIR::Function& function, const ValueNumeration& numeration,
-        const LivenessAnalysis& liveness) const;
+        const Liveness& liveness) const;
 };
 
 } // namespace Cangjie::JIT::X86_64

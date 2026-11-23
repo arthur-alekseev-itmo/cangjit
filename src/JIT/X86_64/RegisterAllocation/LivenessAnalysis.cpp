@@ -8,14 +8,14 @@
 
 #include <algorithm>
 #include <cassert>
-#include <ostream>
+#include <utility>
 
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
 
 namespace Cangjie::JIT::X86_64 {
 namespace {
-using Word = LivenessAnalysis::Word;
+using Word = Liveness::Word;
 using Id = ValueNumeration::Id;
 constexpr size_t BITS_PER_WORD = sizeof(Word) * 8;
 
@@ -35,19 +35,15 @@ void Remove(Word* bitmap, Id id) noexcept
 }
 } // namespace
 
-LivenessAnalysis LivenessAnalysis::Analyze(const CHIR::Function& function, const ValueNumeration& numeration)
+Liveness LivenessAnalysis::Analyze(const CHIR::Function& function, const ValueNumeration& numeration)
 {
     LivenessAnalysis analysis;
     analysis.wordsPerBlock = (static_cast<size_t>(numeration.GetValueCount()) + BITS_PER_WORD - 1) / BITS_PER_WORD;
     analysis.CollectBlocks(function);
     analysis.Compute(numeration);
-    return analysis;
+    return analysis.MakeLiveness(numeration);
 }
 
-bool LivenessAnalysis::Contains(const Word* bitmap, Id id) noexcept
-{
-    return (bitmap[id / BITS_PER_WORD] & (Word{1} << (id % BITS_PER_WORD))) != 0;
-}
 
 void LivenessAnalysis::Transfer(const CHIR::Expression& expression, const ValueNumeration& numeration, Word* live)
 {
@@ -61,50 +57,6 @@ void LivenessAnalysis::Transfer(const CHIR::Expression& expression, const ValueN
     }
 }
 
-std::optional<size_t> LivenessAnalysis::GetBlockIndex(const CHIR::Block* block) const noexcept
-{
-    const auto found = blockIndices.find(block);
-    return found == blockIndices.end() ? std::nullopt : std::optional<size_t>(found->second);
-}
-
-const LivenessAnalysis::Word* LivenessAnalysis::GetLiveIn(size_t block) const noexcept
-{
-    return wordsPerBlock == 0 ? nullptr : liveIns.data() + block * wordsPerBlock;
-}
-
-const LivenessAnalysis::Word* LivenessAnalysis::GetLiveOut(size_t block) const noexcept
-{
-    return wordsPerBlock == 0 ? nullptr : liveOuts.data() + block * wordsPerBlock;
-}
-
-void LivenessAnalysis::Dump(std::ostream& output, const ValueNumeration& numeration) const
-{
-    std::vector<Word> live(wordsPerBlock);
-    for (size_t block = 0; block < blocks.size(); ++block) {
-        if (wordsPerBlock != 0) {
-            const auto* liveOut = GetLiveOut(block);
-            std::copy(liveOut, liveOut + wordsPerBlock, live.begin());
-        }
-        output << "  block " << blocks[block]->GetIdentifier() << " (reverse order):\n";
-        const auto expressions = blocks[block]->GetExpressions();
-        for (auto expression = expressions.rbegin(); expression != expressions.rend(); ++expression) {
-            Transfer(**expression, numeration, live.data());
-            output << "    before " << (*expression)->ToString(0) << " : {";
-            bool first = true;
-            for (Id id = 0; id < numeration.GetValueCount(); ++id) {
-                if (!Contains(live.data(), id)) {
-                    continue;
-                }
-                if (!first) {
-                    output << ", ";
-                }
-                output << numeration.GetValue(id)->GetIdentifier();
-                first = false;
-            }
-            output << "}\n";
-        }
-    }
-}
 
 void LivenessAnalysis::CollectBlocks(const CHIR::Function& function)
 {
@@ -145,7 +97,7 @@ void LivenessAnalysis::Compute(const ValueNumeration& numeration)
         for (const auto* expression : blocks[i]->GetExpressions()) {
             for (size_t operand = 0; operand < expression->GetNumOfNonSuccessorOperands(); ++operand) {
                 const auto id = numeration.GetId(expression->GetOperand(operand));
-                if (id && !Contains(blockDefinitions, *id)) {
+                if (id && !Liveness::Contains(blockDefinitions, *id)) {
                     Add(blockUses, *id);
                 }
             }
@@ -162,7 +114,7 @@ void LivenessAnalysis::Compute(const ValueNumeration& numeration)
             const size_t block = reverse - 1;
             std::fill(nextOut.begin(), nextOut.end(), Word{0});
             for (size_t i = successorOffsets[block]; i < successorOffsets[block + 1]; ++i) {
-                const auto* successor = GetLiveIn(successorIndices[i]);
+                const auto* successor = GetRow(liveIns, successorIndices[i], wordsPerBlock);
                 for (size_t word = 0; word < wordsPerBlock; ++word) {
                     nextOut[word] |= successor[word];
                 }
@@ -181,5 +133,45 @@ void LivenessAnalysis::Compute(const ValueNumeration& numeration)
             }
         }
     } while (changed);
+}
+
+Liveness LivenessAnalysis::MakeLiveness(const ValueNumeration& numeration)
+{
+    Liveness result;
+    result.wordsPerSet = wordsPerBlock;
+    result.blocks = std::move(blocks);
+    result.blockIndices = std::move(blockIndices);
+    result.blockOffsets.reserve(result.blocks.size());
+    size_t rowCount = 0;
+    for (const auto* block : result.blocks) {
+        result.blockOffsets.push_back(rowCount);
+        rowCount += block->GetExpressionsNum() + 1;
+    }
+    result.expressionIndices.reserve(rowCount - result.blocks.size());
+    result.bitmaps.resize(rowCount * wordsPerBlock);
+    for (size_t block = 0; block < result.blocks.size(); ++block) {
+        const auto* chirBlock = result.blocks[block];
+        const size_t count = chirBlock->GetExpressionsNum();
+        const size_t first = result.blockOffsets[block];
+        if (wordsPerBlock != 0) {
+            const auto* liveOut = GetRow(liveOuts, block, wordsPerBlock);
+            auto* exit = GetRow(result.bitmaps, first + count, wordsPerBlock);
+            std::copy(liveOut, liveOut + wordsPerBlock, exit);
+        }
+        for (size_t i = count; i > 0; --i) {
+            const auto* expression = chirBlock->GetExpressionByIdx(i - 1);
+            const size_t row = first + i - 1;
+            const bool inserted = result.expressionIndices.emplace(expression, row).second;
+            assert(inserted);
+            (void)inserted;
+            auto* before = GetRow(result.bitmaps, row, wordsPerBlock);
+            if (wordsPerBlock != 0) {
+                const auto* after = GetRow(result.bitmaps, row + 1, wordsPerBlock);
+                std::copy(after, after + wordsPerBlock, before);
+            }
+            Transfer(*expression, numeration, before);
+        }
+    }
+    return result;
 }
 } // namespace Cangjie::JIT::X86_64
