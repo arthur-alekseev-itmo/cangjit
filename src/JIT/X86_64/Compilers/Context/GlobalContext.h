@@ -8,6 +8,8 @@
 #define CANGJIE_JIT_X86_64_COMPILERS_CONTEXT_GLOBAL_CONTEXT_H
 
 #include <asmjit/core.h>
+#include <cstdio>
+
 
 #include "../../JitRuntime.h"
 #include "../../LazyCalls/FunctionRegistry.h"
@@ -19,8 +21,12 @@
 namespace Cangjie::JIT::X86_64 {
 class GlobalContext final {
 public:
-    explicit GlobalContext(JitRuntime& jitRuntime)
-        : jitRuntime(jitRuntime), allocatorParams(MakeAllocatorParams()), runtime(&allocatorParams) {}
+    explicit GlobalContext(JitRuntime& jitRuntime, bool loggingEnabled = false)
+        : jitRuntime(jitRuntime), allocatorParams(MakeAllocatorParams()), runtime(&allocatorParams),
+          loggingEnabled(loggingEnabled)
+    {
+        logger.addFlags(asmjit::FormatFlags::kMachineCode | asmjit::FormatFlags::kHexImms);
+    }
     ~GlobalContext() { jitRuntime.CloseOrTerminate(); }
 
     // The host must quiesce generated code and tasks before closing.
@@ -38,6 +44,16 @@ public:
     bool IsStackGrowthEnabled() const noexcept
     {
         return jitRuntime.IsStackGrowthEnabled();
+    }
+
+    void SetLoggingEnabled(bool enabled) noexcept
+    {
+        loggingEnabled = enabled;
+    }
+
+    asmjit::Logger* GetLogger() noexcept
+    {
+        return loggingEnabled ? &logger : nullptr;
     }
 
     CHIR::CHIRBuilder& GetCHIRBuilder() noexcept
@@ -88,6 +104,8 @@ private:
     FunctionRegistry functionRegistry;
     LazyCallSiteRegistry lazyCallSites;
     FunctionResolver functionResolver;
+    asmjit::FileLogger logger{stderr};
+    bool loggingEnabled;
 };
 } // namespace Cangjie::JIT::X86_64
 

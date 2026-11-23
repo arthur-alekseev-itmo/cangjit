@@ -38,11 +38,15 @@ CompilationResult CompileFunction::CompileToAddress(std::ostream* output) const
         !function.GetFuncType()) {
         return CompilationResult::Failure({"invalid function"});
     }
+    if (auto* logger = globalContext.GetLogger()) {
+        logger->logf("[JIT] compiling function %s\n", function.GetIdentifier().c_str());
+    }
     auto valueNumeration = ValueNumerator(function).Run();
-    auto interferenceGraph = LivenessInterferenceGraphBuilder().Build(function, valueNumeration);
+    auto liveness = LivenessAnalysis::Analyze(function, valueNumeration);
+    auto interferenceGraph = LivenessInterferenceGraphBuilder().Build(function, valueNumeration, liveness);
     auto registerAllocation = TrivialStackRegalloc().Allocate(valueNumeration, interferenceGraph);
-    FunctionContext context(globalContext, &function, std::move(valueNumeration), std::move(interferenceGraph),
-        std::move(registerAllocation));
+    FunctionContext context(globalContext, &function, std::move(valueNumeration), std::move(liveness),
+        std::move(interferenceGraph), std::move(registerAllocation));
     if (context.Prepare()) {
         if (output) {
             context.Dump(*output);
@@ -114,6 +118,13 @@ CompilationResult CompileFunction::CompileToAddress(std::ostream* output) const
     if (!globalContext.GetLazyCallSiteRegistry().Register(base, context.GetCode().codeSize(), context.GetLazyCallSites())) {
         globalContext.GetRuntime().release(address);
         return CompilationResult::Failure({"failed to register lazy call sites"});
+    }
+    if (auto* logger = globalContext.GetLogger()) {
+        logger->logf("[JIT] function created name=%s entry=%p code_size=%zu frame_size=%zu "
+                     "metadata=%p metadata_size=%zu\n",
+            function.GetIdentifier().c_str(), reinterpret_cast<void*>(base + PREFIX_SIZE),
+            static_cast<size_t>(codeSize), static_cast<size_t>(*frameSize),
+            reinterpret_cast<void*>(base + metadataOffset), encoded.descriptor.size());
     }
     return CompilationResult::Success(base + PREFIX_SIZE);
 }

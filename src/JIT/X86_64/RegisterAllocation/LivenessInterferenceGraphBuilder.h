@@ -7,13 +7,20 @@
 #ifndef CANGJIE_JIT_X86_64_REGISTER_ALLOCATION_LIVENESS_INTERFERENCE_GRAPH_BUILDER_H
 #define CANGJIE_JIT_X86_64_REGISTER_ALLOCATION_LIVENESS_INTERFERENCE_GRAPH_BUILDER_H
 
-#include "InterferenceGraphBuilder.h"
+#include "InterferenceGraph.h"
+
+namespace Cangjie::CHIR {
+class Function;
+}
 
 namespace Cangjie::JIT::X86_64 {
+class LivenessAnalysis;
+class ValueNumeration;
 
-class LivenessInterferenceGraphBuilder final : public InterferenceGraphBuilder {
+class LivenessInterferenceGraphBuilder final {
 public:
-    InterferenceGraph Build(const CHIR::Function& function, const ValueNumeration& numeration) const override;
+    InterferenceGraph Build(const CHIR::Function& function, const ValueNumeration& numeration,
+        const LivenessAnalysis& liveness) const;
 };
 
 } // namespace Cangjie::JIT::X86_64

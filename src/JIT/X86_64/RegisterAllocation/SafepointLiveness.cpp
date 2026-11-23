@@ -12,6 +12,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "LivenessAnalysis.h"
 #include "../Utils/StackFrameUtils.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
@@ -21,19 +22,7 @@ namespace {
 using Id = ValueNumeration::Id;
 using Bits = std::vector<unsigned char>;
 
-void Transfer(const CHIR::Expression& expr, const ValueNumeration& numbers, Bits& live)
-{
-    if (const auto* result = expr.GetResult()) {
-        if (auto id = numbers.GetId(result)) {
-            live[*id] = 0;
-        }
-    }
-    for (size_t i = 0; i < expr.GetNumOfNonSuccessorOperands(); ++i) {
-        if (auto id = numbers.GetId(expr.GetOperand(i))) {
-            live[*id] = 1;
-        }
-    }
-}
+
 
 bool IsObjectType(const CHIR::Type& type)
 {
@@ -46,7 +35,8 @@ bool IsObjectType(const CHIR::Type& type)
 } // namespace
 
 SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
-    const ValueNumeration& numbers, const RegisterAllocation& allocation, const CHIR::Expression& target)
+    const ValueNumeration& numbers, const RegisterAllocation& allocation, const LivenessAnalysis& liveness,
+    const CHIR::Expression& target)
 {
     const auto* body = function.GetBody();
     const size_t count = numbers.GetValueCount();
@@ -70,31 +60,25 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
             }
         }
     }
-    auto blocks = body->GetAllBlocks();
-    blocks.erase(std::remove_if(blocks.begin(), blocks.end(),
-        [&](const CHIR::Block* b) { return b->GetFuncOrLambdaBody() != body; }), blocks.end());
-    std::unordered_map<const CHIR::Block*, size_t> index;
-    for (size_t i = 0; i < blocks.size(); ++i) {
-        index.emplace(blocks[i], i);
-    }
-    const auto entry = index.find(body->GetEntryBlock());
-    if (entry == index.end()) {
+    const auto& blocks = liveness.GetBlocks();
+    const auto entry = liveness.GetBlockIndex(body->GetEntryBlock());
+    if (!entry) {
         return SafepointLivenessResult::Failure("function has no entry block");
     }
     std::vector<std::vector<size_t>> successors(blocks.size()), predecessors(blocks.size());
     for (size_t i = 0; i < blocks.size(); ++i) {
         for (const auto* successor : blocks[i]->GetSuccessors()) {
-            auto found = index.find(successor);
-            if (found == index.end()) {
+            const auto found = liveness.GetBlockIndex(successor);
+            if (!found) {
                 return SafepointLivenessResult::Failure("CFG successor outside function");
             }
-            successors[i].push_back(found->second);
-            predecessors[found->second].push_back(i);
+            successors[i].push_back(*found);
+            predecessors[*found].push_back(i);
         }
     }
     std::vector<unsigned char> reachable(blocks.size());
-    std::vector<size_t> work{entry->second};
-    reachable[entry->second] = 1;
+    std::vector<size_t> work{*entry};
+    reachable[*entry] = 1;
     for (size_t n = 0; n < work.size(); ++n) {
         for (auto next : successors[work[n]]) {
             if (!reachable[next]) {
@@ -103,8 +87,8 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
             }
         }
     }
-    auto targetBlock = index.find(target.GetParentBlock());
-    if (targetBlock == index.end() || !reachable[targetBlock->second]) {
+    const auto targetBlock = liveness.GetBlockIndex(target.GetParentBlock());
+    if (!targetBlock || !reachable[*targetBlock]) {
         return SafepointLivenessResult::Failure("safepoint is not in a reachable block");
     }
     for (auto b : work) {
@@ -121,31 +105,6 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
             }
         }
     }
-    // Backward may-liveness, including all normal and exceptional successors.
-    std::vector<Bits> in(blocks.size(), Bits(count)), out = in;
-    bool changed;
-    do {
-        changed = false;
-        for (auto it = work.rbegin(); it != work.rend(); ++it) {
-            size_t b = *it;
-            Bits next(count);
-            for (auto s : successors[b]) {
-                for (size_t id = 0; id < count; ++id) {
-                    next[id] |= in[s][id];
-                }
-            }
-            Bits before = next;
-            auto expressions = blocks[b]->GetExpressions();
-            for (auto e = expressions.rbegin(); e != expressions.rend(); ++e) {
-                Transfer(**e, numbers, before);
-            }
-            if (next != out[b] || before != in[b]) {
-                out[b] = std::move(next);
-                in[b] = std::move(before);
-                changed = true;
-            }
-        }
-    } while (changed);
 
     // Forward must-initialization. Start at top except at entry, and intersect
     // incoming edges. A try-result exists only on the success edge.
@@ -154,11 +113,12 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
     for (Id id = numbers.GetParameterOffset(); id < numbers.GetLocalOffset(); ++id) {
         parameters[id] = 1;
     }
+    bool changed;
     do {
         changed = false;
         for (auto b : work) {
             Bits before(count, 1);
-            if (b == entry->second) {
+            if (b == *entry) {
                 before = parameters;
             } else {
                 for (auto pred : predecessors[b]) {
@@ -199,12 +159,17 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
         }
     } while (changed);
 
-    const size_t b = targetBlock->second;
-    Bits live = out[b], initialized = initializedIn[b];
+    const size_t b = *targetBlock;
+    Bits initialized = initializedIn[b];
+    std::vector<LivenessAnalysis::Word> live(liveness.GetWordCount());
+    if (!live.empty()) {
+        const auto* liveOut = liveness.GetLiveOut(b);
+        std::copy(liveOut, liveOut + live.size(), live.begin());
+    }
     bool found = false;
     const auto expressions = blocks[b]->GetExpressions();
     for (auto it = expressions.rbegin(); it != expressions.rend(); ++it) {
-        Transfer(**it, numbers, live);
+        LivenessAnalysis::Transfer(**it, numbers, live.data());
         if (*it == &target) {
             found = true;
             break;
@@ -227,9 +192,9 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
     // uninitialized even though the ordinary transfer kills the definition.
     const auto branches = target.GetSuccessAndErrorBlocks();
     if (branches.second && target.GetResult()) {
-        const auto e = index.find(branches.second);
+        const auto e = liveness.GetBlockIndex(branches.second);
         const auto id = numbers.GetId(target.GetResult());
-        if (e != index.end() && id && in[e->second][*id]) {
+        if (e && id && LivenessAnalysis::Contains(liveness.GetLiveIn(*e), *id)) {
             return SafepointLivenessResult::Failure("try result is live on its exception edge");
         }
     }
@@ -340,7 +305,7 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
         return 0;
     };
     for (Id id = 0; id < count; ++id) {
-        if (!live[id]) {
+        if (!LivenessAnalysis::Contains(live.data(), id)) {
             continue;
         }
         std::unordered_set<Id> seen;

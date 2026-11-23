@@ -21,6 +21,7 @@
 #include "../../JitMetadataBuilder.h"
 #include "../../LazyCalls/LazyCallSiteRegistry.h"
 #include "../../RegisterAllocation/InterferenceGraph.h"
+#include "../../RegisterAllocation/LivenessAnalysis.h"
 #include "../../RegisterAllocation/RegisterAllocation.h"
 #include "../../RegisterAllocation/ValueNumeration.h"
 
@@ -40,7 +41,7 @@ class GlobalContext;
 class FunctionContext final {
 public:
     FunctionContext(GlobalContext& globalContext, const CHIR::Function* function, ValueNumeration valueNumeration,
-        InterferenceGraph interferenceGraph, RegisterAllocation registerAllocation) noexcept;
+        LivenessAnalysis liveness, InterferenceGraph interferenceGraph, RegisterAllocation registerAllocation) noexcept;
     bool Prepare();
 
     GlobalContext& GetGlobalContext() const noexcept;
@@ -63,6 +64,7 @@ public:
     std::vector<PendingLazyCallSite>& GetLazyCallSites() noexcept;
     const std::vector<const CHIR::Function*>& GetFunctionsToStub() const noexcept;
     const ValueNumeration& GetValueNumeration() const noexcept;
+    const LivenessAnalysis& GetLivenessAnalysis() const noexcept { return liveness; }
     const InterferenceGraph& GetInterferenceGraph() const noexcept;
     const RegisterAllocation& GetRegisterAllocation() const noexcept;
     void Dump(std::ostream& output) const;
@@ -100,6 +102,7 @@ private:
     std::vector<const CHIR::Function*> functionsToStub;
     std::vector<PendingLazyCallSite> lazyCallSites;
     ValueNumeration valueNumeration;
+    LivenessAnalysis liveness;
     InterferenceGraph interferenceGraph;
     RegisterAllocation registerAllocation;
     size_t hiddenTypeInfoBase = 0;

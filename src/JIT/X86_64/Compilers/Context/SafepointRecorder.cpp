@@ -27,7 +27,8 @@ bool SafepointRecorder::Record(const CHIR::Expression& expression, const CHIR::V
     }
     const auto& numeration = context.GetValueNumeration();
     const auto& allocation = context.GetRegisterAllocation();
-    auto result = ComputeSafepointLiveness(*context.GetFunction(), numeration, allocation, expression);
+    auto result = ComputeSafepointLiveness(
+        *context.GetFunction(), numeration, allocation, context.GetLivenessAnalysis(), expression);
     if (!result) {
         context.Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
         return false;

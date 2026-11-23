@@ -20,6 +20,7 @@ class Function;
 }
 
 namespace Cangjie::JIT::X86_64 {
+class LivenessAnalysis;
 // GC roots, stack-interior roots, and derived locations per GC root, in the
 // ordering required by JitMetadataBuilder::RecordSafepoint.
 using SafepointRoots = std::tuple<JitMetadataBuilder::Roots, JitMetadataBuilder::Roots,
@@ -29,6 +30,7 @@ using SafepointLivenessResult = Result<SafepointRoots, std::string>;
 // Analyze immediately before expression: arguments are live; its result is not
 // yet initialized. A string means no exact, safe stack map can be emitted.
 SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
-    const ValueNumeration& numeration, const RegisterAllocation& allocation, const CHIR::Expression& expression);
+    const ValueNumeration& numeration, const RegisterAllocation& allocation, const LivenessAnalysis& liveness,
+    const CHIR::Expression& expression);
 } // namespace Cangjie::JIT::X86_64
 #endif

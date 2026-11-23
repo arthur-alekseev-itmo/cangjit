@@ -17,12 +17,14 @@
 
 namespace Cangjie::JIT::X86_64 {
 FunctionContext::FunctionContext(GlobalContext& globalContext, const CHIR::Function* function,
-    ValueNumeration valueNumeration, InterferenceGraph interferenceGraph, RegisterAllocation registerAllocation) noexcept
+    ValueNumeration valueNumeration, LivenessAnalysis liveness, InterferenceGraph interferenceGraph,
+    RegisterAllocation registerAllocation) noexcept
     : globalContext(globalContext),
       error(asmjit::kErrorOk),
       metadataBuilder(globalContext.IsStackGrowthEnabled()),
       function(function),
       valueNumeration(std::move(valueNumeration)),
+      liveness(std::move(liveness)),
       interferenceGraph(std::move(interferenceGraph)),
       registerAllocation(std::move(registerAllocation))
 {
@@ -49,6 +51,7 @@ bool FunctionContext::InitializeAssembler()
     if (error != asmjit::kErrorOk) {
         return false;
     }
+    code.setLogger(globalContext.GetLogger());
     code.setErrorHandler(&emitterErrorHandler);
     error = code.attach(&assembler);
     if (error != asmjit::kErrorOk) {

@@ -6,6 +6,8 @@
 
 #include "CompileBlock.h"
 
+#include <algorithm>
+
 #include "../Context/GlobalContext.h"
 #include "../Expression/CompileApply.h"
 #include "../Expression/CompileBinaryExpression.h"
@@ -326,6 +328,11 @@ void CompileBlock::Compile(FunctionContext& context, const CHIR::Block& block)
 
 void CompileBlock::CompileExpression(FunctionContext& context, const CHIR::Expression& expression)
 {
+    if (context.GetCode().logger()) {
+        auto text = expression.ToString(0);
+        std::replace(text.begin(), text.end(), '\n', ' ');
+        context.GetAssembler().commentf("; CHIR: %s", text.c_str());
+    }
     switch (expression.GetExprKind()) {
         case CHIR::ExprKind::APPLY:
             CompileApply::Compile(context, static_cast<const CHIR::Apply&>(expression));
