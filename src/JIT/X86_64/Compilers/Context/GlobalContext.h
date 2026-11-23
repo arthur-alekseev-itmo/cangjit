@@ -9,6 +9,7 @@
 
 #include <asmjit/core.h>
 #include <cstdio>
+#include "DebugConfig.h"
 
 
 #include "../../JitRuntime.h"
@@ -21,9 +22,8 @@
 namespace Cangjie::JIT::X86_64 {
 class GlobalContext final {
 public:
-    explicit GlobalContext(JitRuntime& jitRuntime, bool loggingEnabled = false)
-        : jitRuntime(jitRuntime), allocatorParams(MakeAllocatorParams()), runtime(&allocatorParams),
-          loggingEnabled(loggingEnabled)
+    explicit GlobalContext(JitRuntime& jitRuntime)
+        : jitRuntime(jitRuntime), allocatorParams(MakeAllocatorParams()), runtime(&allocatorParams)
     {
         logger.addFlags(asmjit::FormatFlags::kMachineCode | asmjit::FormatFlags::kHexImms);
     }
@@ -46,14 +46,14 @@ public:
         return jitRuntime.IsStackGrowthEnabled();
     }
 
-    void SetLoggingEnabled(bool enabled) noexcept
+    bool IsDebugEnabled(FuncPrintMode mode) const noexcept
     {
-        loggingEnabled = enabled;
+        return IsEnabled(debugConfig.func_print_mode, mode);
     }
 
     asmjit::Logger* GetLogger() noexcept
     {
-        return loggingEnabled ? &logger : nullptr;
+        return IsDebugEnabled(FuncPrintMode::ASM) ? &logger : nullptr;
     }
 
     CHIR::CHIRBuilder& GetCHIRBuilder() noexcept
@@ -105,7 +105,7 @@ private:
     LazyCallSiteRegistry lazyCallSites;
     FunctionResolver functionResolver;
     asmjit::FileLogger logger{stderr};
-    bool loggingEnabled;
+    DebugConfig debugConfig{DEFAULT_DEBUG_CONFIG};
 };
 } // namespace Cangjie::JIT::X86_64
 

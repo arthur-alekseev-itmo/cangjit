@@ -7,8 +7,6 @@
 #ifndef CANGJIE_JIT_X86_64_COMPILERS_COMPILE_FUNCTION_H
 #define CANGJIE_JIT_X86_64_COMPILERS_COMPILE_FUNCTION_H
 
-#include <iosfwd>
-
 #include "../../Types.h"
 
 namespace Cangjie::CHIR {
@@ -27,10 +25,12 @@ class CompileFunction final {
 public:
     CompileFunction(GlobalContext& globalContext, const CHIR::Function& function) noexcept;
 
-    CompilationResult CompileToAddress(std::ostream* output = nullptr) const;
+    CompilationResult CompileToAddress() const;
     void Compile(FunctionContext& context) const;
 
 private:
+    CompilationResult CompileToAddressImpl() const;
+    void PrintDebugInfo(const FunctionContext& context) const;
     void MakePrologue(FunctionContext& context) const;
     void MakeEpilogue(FunctionContext& context) const;
     bool SaveReturnValue(FunctionContext& context) const;

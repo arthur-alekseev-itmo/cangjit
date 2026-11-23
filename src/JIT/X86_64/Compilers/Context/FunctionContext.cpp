@@ -10,22 +10,19 @@
 #include "../../Utils/StackFrameUtils.h"
 
 #include <cassert>
-#include <ostream>
 #include <utility>
 
 #include "cangjie/CHIR/IR/Value/Value.h"
 
 namespace Cangjie::JIT::X86_64 {
 FunctionContext::FunctionContext(GlobalContext& globalContext, const CHIR::Function* function,
-    ValueNumeration valueNumeration, LivenessAnalysis liveness, InterferenceGraph interferenceGraph,
-    RegisterAllocation registerAllocation) noexcept
+    ValueNumeration valueNumeration, LivenessAnalysis liveness, RegisterAllocation registerAllocation) noexcept
     : globalContext(globalContext),
       error(asmjit::kErrorOk),
       metadataBuilder(globalContext.IsStackGrowthEnabled()),
       function(function),
       valueNumeration(std::move(valueNumeration)),
       liveness(std::move(liveness)),
-      interferenceGraph(std::move(interferenceGraph)),
       registerAllocation(std::move(registerAllocation))
 {
     assert(function != nullptr);
@@ -51,7 +48,10 @@ bool FunctionContext::InitializeAssembler()
     if (error != asmjit::kErrorOk) {
         return false;
     }
-    code.setLogger(globalContext.GetLogger());
+    if (auto* logger = globalContext.GetLogger()) {
+        logger->logf("[JIT] assembly function %s\n", function->GetIdentifier().c_str());
+        code.setLogger(logger);
+    }
     code.setErrorHandler(&emitterErrorHandler);
     error = code.attach(&assembler);
     if (error != asmjit::kErrorOk) {
@@ -158,23 +158,11 @@ const ValueNumeration& FunctionContext::GetValueNumeration() const noexcept
     return valueNumeration;
 }
 
-const InterferenceGraph& FunctionContext::GetInterferenceGraph() const noexcept
-{
-    return interferenceGraph;
-}
 
 const RegisterAllocation& FunctionContext::GetRegisterAllocation() const noexcept
 {
     return registerAllocation;
 }
 
-void FunctionContext::Dump(std::ostream& output) const
-{
-    output << "FunctionContext(function=" << function->GetIdentifier() << ")\n";
-    output << "Body:\n" << function->GetBody()->ToString(0) << '\n';
-    valueNumeration.Dump(output);
-    interferenceGraph.Dump(output);
-    registerAllocation.Dump(output);
-}
 
 } // namespace Cangjie::JIT::X86_64

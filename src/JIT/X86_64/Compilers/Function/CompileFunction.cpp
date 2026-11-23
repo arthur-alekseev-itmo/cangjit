@@ -6,6 +6,7 @@
 
 #include "CompileFunction.h"
 
+#include <cstdio>
 #include <iostream>
 #include <limits>
 #include <utility>
@@ -32,28 +33,51 @@ CompileFunction::CompileFunction(GlobalContext& globalContext, const CHIR::Funct
 }
 
 
-CompilationResult CompileFunction::CompileToAddress(std::ostream* output) const
+CompilationResult CompileFunction::CompileToAddress() const
+{
+    const bool trace = globalContext.IsDebugEnabled(FuncPrintMode::ENTRY);
+    if (trace) {
+        std::fprintf(stderr, "[JIT] compiling function %s\n", function.GetIdentifier().c_str());
+    }
+    auto result = CompileToAddressImpl();
+    if (trace) {
+        if (result) {
+            std::fprintf(stderr, "[JIT] finished function %s\n", function.GetIdentifier().c_str());
+        } else {
+            std::fprintf(stderr, "[JIT] failed function %s: %s\n",
+                function.GetIdentifier().c_str(), result.Error().message.c_str());
+        }
+    }
+    return result;
+}
+
+void CompileFunction::PrintDebugInfo(const FunctionContext& context) const
+{
+    if (globalContext.IsDebugEnabled(FuncPrintMode::REGALLOC)) {
+        std::cerr << "[JIT] register allocation " << function.GetIdentifier() << '\n';
+        context.GetValueNumeration().Dump(std::cerr);
+        context.GetRegisterAllocation().Dump(std::cerr);
+    }
+    if (globalContext.IsDebugEnabled(FuncPrintMode::LIVENESS)) {
+        std::cerr << "[JIT] liveness " << function.GetIdentifier() << '\n';
+        context.GetLivenessAnalysis().Dump(std::cerr, context.GetValueNumeration());
+    }
+}
+
+CompilationResult CompileFunction::CompileToAddressImpl() const
 {
     if (!function.GetBody() || !function.GetBody()->GetEntryBlock() || !function.GetReturnType() ||
         !function.GetFuncType()) {
         return CompilationResult::Failure({"invalid function"});
     }
-    if (auto* logger = globalContext.GetLogger()) {
-        logger->logf("[JIT] compiling function %s\n", function.GetIdentifier().c_str());
-    }
     auto valueNumeration = ValueNumerator(function).Run();
     auto liveness = LivenessAnalysis::Analyze(function, valueNumeration);
-    auto interferenceGraph = LivenessInterferenceGraphBuilder().Build(function, valueNumeration, liveness);
-    auto registerAllocation = TrivialStackRegalloc().Allocate(valueNumeration, interferenceGraph);
+    auto registerAllocation = TrivialStackRegalloc().Allocate(
+        valueNumeration, LivenessInterferenceGraphBuilder().Build(function, valueNumeration, liveness));
     FunctionContext context(globalContext, &function, std::move(valueNumeration), std::move(liveness),
-        std::move(interferenceGraph), std::move(registerAllocation));
+        std::move(registerAllocation));
     if (context.Prepare()) {
-        if (output) {
-            context.Dump(*output);
-            if (!*output) {
-                return CompilationResult::Failure({"failed to write JIT dump"});
-            }
-        }
+        PrintDebugInfo(context);
         Compile(context);
     }
     if (const auto& failure = context.GetFailure()) {
@@ -119,8 +143,8 @@ CompilationResult CompileFunction::CompileToAddress(std::ostream* output) const
         globalContext.GetRuntime().release(address);
         return CompilationResult::Failure({"failed to register lazy call sites"});
     }
-    if (auto* logger = globalContext.GetLogger()) {
-        logger->logf("[JIT] function created name=%s entry=%p code_size=%zu frame_size=%zu "
+    if (globalContext.IsDebugEnabled(FuncPrintMode::ENTRY)) {
+        std::fprintf(stderr, "[JIT] function created name=%s entry=%p code_size=%zu frame_size=%zu "
                      "metadata=%p metadata_size=%zu\n",
             function.GetIdentifier().c_str(), reinterpret_cast<void*>(base + PREFIX_SIZE),
             static_cast<size_t>(codeSize), static_cast<size_t>(*frameSize),

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <ostream>
 
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
@@ -74,6 +75,35 @@ const LivenessAnalysis::Word* LivenessAnalysis::GetLiveIn(size_t block) const no
 const LivenessAnalysis::Word* LivenessAnalysis::GetLiveOut(size_t block) const noexcept
 {
     return wordsPerBlock == 0 ? nullptr : liveOuts.data() + block * wordsPerBlock;
+}
+
+void LivenessAnalysis::Dump(std::ostream& output, const ValueNumeration& numeration) const
+{
+    std::vector<Word> live(wordsPerBlock);
+    for (size_t block = 0; block < blocks.size(); ++block) {
+        if (wordsPerBlock != 0) {
+            const auto* liveOut = GetLiveOut(block);
+            std::copy(liveOut, liveOut + wordsPerBlock, live.begin());
+        }
+        output << "  block " << blocks[block]->GetIdentifier() << " (reverse order):\n";
+        const auto expressions = blocks[block]->GetExpressions();
+        for (auto expression = expressions.rbegin(); expression != expressions.rend(); ++expression) {
+            Transfer(**expression, numeration, live.data());
+            output << "    before " << (*expression)->ToString(0) << " : {";
+            bool first = true;
+            for (Id id = 0; id < numeration.GetValueCount(); ++id) {
+                if (!Contains(live.data(), id)) {
+                    continue;
+                }
+                if (!first) {
+                    output << ", ";
+                }
+                output << numeration.GetValue(id)->GetIdentifier();
+                first = false;
+            }
+            output << "}\n";
+        }
+    }
 }
 
 void LivenessAnalysis::CollectBlocks(const CHIR::Function& function)

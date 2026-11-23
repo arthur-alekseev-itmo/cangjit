@@ -22,14 +22,6 @@
 #include "cangjie/Mangle/MangleUtils.h"
 
 namespace Cangjie::JIT::X86_64 {
-namespace {
-bool IsJitLoggingEnabled()
-{
-    const auto* value = std::getenv("CANGJIT_LOG");
-    return value && std::strcmp(value, "1") == 0;
-}
-}
-
 X86_64Compiler::X86_64Compiler() = default;
 
 X86_64Compiler::X86_64Compiler(std::vector<std::string> imports, std::vector<std::string> searchPaths)
@@ -45,7 +37,7 @@ Result<std::unique_ptr<X86_64Compiler>, RuntimeError> X86_64Compiler::Create(con
     }
     auto compiler = std::make_unique<X86_64Compiler>();
     compiler->jitRuntime = std::move(runtime).Value();
-    compiler->globalContext = std::make_unique<GlobalContext>(*compiler->jitRuntime, IsJitLoggingEnabled());
+    compiler->globalContext = std::make_unique<GlobalContext>(*compiler->jitRuntime);
     return Result<std::unique_ptr<X86_64Compiler>, RuntimeError>::Success(std::move(compiler));
 }
 
@@ -157,13 +149,13 @@ bool X86_64Compiler::ConfigureRuntime(std::ostream& output) const
         return ReportError(output, "JIT runtime initialization failed: " + FormatRuntimeError(runtime.Error()));
     }
     jitRuntime = std::move(runtime).Value();
-    globalContext = std::make_unique<GlobalContext>(*jitRuntime, IsJitLoggingEnabled());
+    globalContext = std::make_unique<GlobalContext>(*jitRuntime);
     return true;
 }
 
 std::optional<std::uintptr_t> X86_64Compiler::CompileUserMain(const CHIR::Function& function, std::ostream& output) const
 {
-    const auto result = CompileFunction(*globalContext, function).CompileToAddress(&output);
+    const auto result = CompileFunction(*globalContext, function).CompileToAddress();
     if (!result) {
         ReportError(output, "JIT compilation failed: " + result.Error().message);
         return std::nullopt;

@@ -51,8 +51,8 @@ CodeAddress ResolveAndPatch(GlobalContext* context, FunctionRecord* record, Code
                     std::fputs("JIT failed to patch lazy call site\n", stderr);
                     std::abort();
                 }
-                if (auto* logger = context->GetLogger()) {
-                    logger->logf("[JIT] call patched name=%s caller=%p immediate=%p target=%p\n",
+                if (context->IsDebugEnabled(FuncPrintMode::ENTRY)) {
+                    std::fprintf(stderr, "[JIT] call patched name=%s caller=%p immediate=%p target=%p\n",
                         record->GetFunction().GetIdentifier().c_str(), reinterpret_cast<void*>(site->caller),
                         reinterpret_cast<void*>(site->caller + site->immediateOffset),
                         reinterpret_cast<void*>(result.Value()));
@@ -294,8 +294,8 @@ CodeAddress CompileFunctionStub::Compile(GlobalContext& context, const CHIR::Fun
         context.GetRuntime().release(allocation);
         return 0;
     }
-    if (auto* logger = context.GetLogger()) {
-        logger->logf("[JIT] stub created name=%s entry=%p\n",
+    if (context.IsDebugEnabled(FuncPrintMode::ENTRY)) {
+        std::fprintf(stderr, "[JIT] stub created name=%s entry=%p\n",
             function->GetIdentifier().c_str(), reinterpret_cast<void*>(entry));
     }
     return entry;

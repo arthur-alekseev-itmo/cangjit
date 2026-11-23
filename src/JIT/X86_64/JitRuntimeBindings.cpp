@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "JitRuntimeBindings.h"
+#include "Compilers/Context/DebugConfig.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -196,7 +197,14 @@ BindingResult JitRuntimeBindings::InitializeRuntime(const ::RuntimeParam* params
     if (!owner) {
         return BindingResult::Success();
     }
-    int result = InitRuntime(params);
+    int result;
+    if constexpr (DEFAULT_DEBUG_CONFIG.runtime_log_mode == RuntimeLogMode::OFF) {
+        auto quietParams = *params;
+        quietParams.logParam.logLevel = RTLOG_OFF;
+        result = InitRuntime(&quietParams);
+    } else {
+        result = InitRuntime(params);
+    }
     if (result != 0) {
         return BindingResult::Failure({RuntimeErrorKind::InitializationFailed, result});
     }

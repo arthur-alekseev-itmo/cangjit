@@ -7,6 +7,7 @@
 #ifndef CANGJIE_JIT_X86_64_REGISTER_ALLOCATION_LIVENESS_ANALYSIS_H
 #define CANGJIE_JIT_X86_64_REGISTER_ALLOCATION_LIVENESS_ANALYSIS_H
 
+#include <iosfwd>
 #include <optional>
 #include <unordered_map>
 #include <vector>
@@ -34,6 +35,7 @@ public:
     size_t GetWordCount() const noexcept { return wordsPerBlock; }
     const Word* GetLiveIn(size_t block) const noexcept;
     const Word* GetLiveOut(size_t block) const noexcept;
+    void Dump(std::ostream& output, const ValueNumeration& numeration) const;
 
 private:
     void CollectBlocks(const CHIR::Function& function);
