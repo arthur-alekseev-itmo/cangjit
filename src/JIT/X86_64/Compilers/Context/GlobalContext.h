@@ -12,7 +12,7 @@
 #include "DebugConfig.h"
 
 
-#include "../../JitRuntime.h"
+#include "../../../Runtime/JitRuntime.h"
 #include "../../LazyCalls/FunctionRegistry.h"
 #include "../../LazyCalls/FunctionResolver.h"
 #include "../../LazyCalls/LazyCallSiteRegistry.h"

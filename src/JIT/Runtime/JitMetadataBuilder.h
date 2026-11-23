@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 
-#include "Types.h"
+#include "../X86_64/Types.h"
 
 namespace Cangjie::JIT::X86_64 {
 // Emits a runtime descriptor with stack-trace strings, a bit-packed stack map

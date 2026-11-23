@@ -16,7 +16,7 @@
 #include <vector>
 
 #include "../Context/GlobalContext.h"
-#include "../../JitMetadataBuilder.h"
+#include "../../../Runtime/JitMetadataBuilder.h"
 #include "../../Utils/SystemVCallingConvention.h"
 #include "CompileFunction.h"
 #include "cangjie/CHIR/IR/Annotation.h"

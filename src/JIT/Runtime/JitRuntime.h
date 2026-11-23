@@ -10,7 +10,7 @@
 #include <memory>
 
 #include "JitRuntimeBindings.h"
-#include "Compilers/Context/StringLiteralPool.h"
+#include "StringLiteralPool.h"
 
 namespace Cangjie::JIT::X86_64 {
 class GlobalContext;

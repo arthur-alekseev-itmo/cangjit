@@ -16,7 +16,7 @@
 
 #include "RuntimeConfig.h"
 #include "RuntimeError.h"
-#include "Types.h"
+#include "../X86_64/Types.h"
 
 
 namespace Cangjie::JIT::X86_64 {

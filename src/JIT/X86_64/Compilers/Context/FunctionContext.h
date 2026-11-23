@@ -17,7 +17,7 @@
 #include "LocalFinalizers.h"
 #include "SafepointRecorder.h"
 #include "TypeInfoEmitter.h"
-#include "../../JitMetadataBuilder.h"
+#include "../../../Runtime/JitMetadataBuilder.h"
 #include "../../LazyCalls/LazyCallSiteRegistry.h"
 #include "../../RegisterAllocation/Liveness.h"
 #include "../../RegisterAllocation/RegisterAllocation.h"

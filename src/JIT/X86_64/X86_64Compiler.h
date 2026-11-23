@@ -15,8 +15,8 @@
 #include <string>
 #include <vector>
 
-#include "RuntimeConfig.h"
-#include "RuntimeError.h"
+#include "../Runtime/RuntimeConfig.h"
+#include "../Runtime/RuntimeError.h"
 #include "Types.h"
 
 namespace Cangjie::CHIR {

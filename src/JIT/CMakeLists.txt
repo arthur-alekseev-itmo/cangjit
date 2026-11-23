@@ -18,6 +18,7 @@ if(CANGJIE_JIT_X86_64)
     endif()
 
     file(GLOB JIT_X86_64_SRC CONFIGURE_DEPENDS
+        Runtime/*.cpp
         X86_64/*.cpp
         X86_64/Compilers/Function/*.cpp
         X86_64/Compilers/Expression/*.cpp

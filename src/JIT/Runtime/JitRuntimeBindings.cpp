@@ -5,7 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "JitRuntimeBindings.h"
-#include "Compilers/Context/DebugConfig.h"
+#include "../X86_64/Compilers/Context/DebugConfig.h"
 
 #include <cstdio>
 #include <cstdlib>

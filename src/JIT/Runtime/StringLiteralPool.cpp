@@ -11,7 +11,7 @@
 #include <utility>
 #include <variant>
 
-#include "../../JitRuntimeBindings.h"
+#include "JitRuntimeBindings.h"
 
 namespace Cangjie::JIT::X86_64 {
 StringLiteralPool::StringLiteralPool(JitRuntimeBindings& runtimeBindings) noexcept : runtimeBindings(runtimeBindings) {}

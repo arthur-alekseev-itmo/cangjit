@@ -10,7 +10,7 @@
 #include <string>
 #include <tuple>
 
-#include "../JitMetadataBuilder.h"
+#include "../../Runtime/JitMetadataBuilder.h"
 #include "../Types.h"
 #include "RegisterAllocation.h"
 
