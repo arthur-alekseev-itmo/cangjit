@@ -15,6 +15,7 @@
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Expression/Terminator.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
+#include "cangjie/Utils/CheckUtils.h"
 
 namespace Cangjie::JIT::X86_64 {
 namespace {
@@ -232,10 +233,12 @@ LocalFinalizerFrontier ComputeLocalFinalizerFrontier(
                     continue;
                 }
                 if (const auto found = repIndex.find((*expr)->GetResult()); found != repIndex.end()) {
+                    CJC_ASSERT(found->second < in.size());
                     in[found->second] = 0;
                 }
                 for (size_t i = 0; i < (*expr)->GetNumOfNonSuccessorOperands(); ++i) {
                     if (const auto found = repIndex.find((*expr)->GetOperand(i)); found != repIndex.end()) {
+                        CJC_ASSERT(found->second < in.size());
                         in[found->second] = 1;
                     }
                 }

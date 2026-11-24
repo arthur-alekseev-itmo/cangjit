@@ -6,6 +6,8 @@
 
 #include "LazyCallSiteRegistry.h"
 
+#include "cangjie/Utils/CheckUtils.h"
+
 #include <cstdint>
 
 namespace Cangjie::JIT::X86_64 {
@@ -16,11 +18,16 @@ bool LazyCallSiteRegistry::Register(
     try {
         for (const auto& site : pending) {
             if (!caller || !site.callee || site.returnOffset >= codeSize ||
-                site.immediateOffset > codeSize || codeSize - site.immediateOffset < sizeof(uint64_t) ||
-                !sites.emplace(caller + site.returnOffset,
-                    LazyCallSite{caller, site.immediateOffset, site.callee}).second) {
+                site.immediateOffset > codeSize || codeSize - site.immediateOffset < sizeof(uint64_t)) {
                 break;
             }
+            const auto [it, published] = sites.emplace(
+                caller + site.returnOffset, LazyCallSite{caller, site.immediateOffset, site.callee});
+            if (!published) {
+                break;
+            }
+            CJC_ASSERT(it->second.caller == caller && it->second.immediateOffset == site.immediateOffset &&
+                it->second.callee == site.callee);
             ++inserted;
         }
     } catch (...) {
@@ -30,7 +37,8 @@ bool LazyCallSiteRegistry::Register(
         return true;
     }
     for (size_t i = 0; i < inserted; ++i) {
-        sites.erase(caller + pending[i].returnOffset);
+        const auto erased = sites.erase(caller + pending[i].returnOffset);
+        CJC_ASSERT(erased == 1);
     }
     return false;
 }

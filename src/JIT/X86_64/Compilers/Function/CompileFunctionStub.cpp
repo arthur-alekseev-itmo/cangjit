@@ -22,6 +22,7 @@
 #include "cangjie/CHIR/IR/Annotation.h"
 #include "cangjie/CHIR/IR/Type/Type.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
+#include "cangjie/Utils/CheckUtils.h"
 
 namespace Cangjie::JIT::X86_64 {
 namespace {
@@ -108,6 +109,8 @@ bool SupportedSignature(const CHIR::Function& function, std::vector<int32_t>& gc
     for (const auto* parameter : function.GetParams()) {
         const auto type = placement->abiParameterTypes.find(parameter);
         const auto location = placement->locations.find(parameter);
+        CJC_ASSERT(type != placement->abiParameterTypes.end());
+        CJC_ASSERT(location != placement->locations.end());
         if (!parameter || type == placement->abiParameterTypes.end() || !type->second ||
             location == placement->locations.end() || !supported(*type->second)) {
             return false;

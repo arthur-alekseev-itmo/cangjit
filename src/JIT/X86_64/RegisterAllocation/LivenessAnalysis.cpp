@@ -12,6 +12,7 @@
 
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
+#include "cangjie/Utils/CheckUtils.h"
 
 namespace Cangjie::JIT::X86_64 {
 namespace {
@@ -80,7 +81,7 @@ void LivenessAnalysis::Compute(const ValueNumeration& numeration)
     for (size_t i = 0; i < blocks.size(); ++i) {
         for (const auto* successor : blocks[i]->GetSuccessors()) {
             const auto found = blockIndices.find(successor);
-            assert(found != blockIndices.end());
+            CJC_ASSERT(found != blockIndices.end());
             if (found != blockIndices.end()) {
                 successorIndices.push_back(found->second);
             }

@@ -21,6 +21,7 @@
 #include "cangjie/CHIR/IR/Type/Type.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
 #include "cangjie/CHIR/Utils/Utils.h"
+#include "cangjie/Utils/CheckUtils.h"
 
 namespace Cangjie::JIT::X86_64 {
 namespace {
@@ -182,6 +183,7 @@ void CompileCall(FunctionContext& context, const CHIR::DynamicDispatch& expressi
     MemoryUtils::ReserveStack(context, placement->stackSize);
     for (size_t i = 0; i < args.size(); ++i) {
         const auto it = placement->locations.find(parameters[i]);
+        CJC_ASSERT(it != placement->locations.end());
         if (it == placement->locations.end() || !args[i] || !args[i]->GetType()) {
             context.Fail(JitFailureKind::UnsupportedCall, expression.GetExprKind());
             return;
@@ -193,7 +195,13 @@ void CompileCall(FunctionContext& context, const CHIR::DynamicDispatch& expressi
         }
     }
     for (size_t i = 0; i < args.size(); ++i) {
-        const auto& location = placement->locations.at(parameters[i]);
+        const auto it = placement->locations.find(parameters[i]);
+        CJC_ASSERT(it != placement->locations.end());
+        if (it == placement->locations.end()) {
+            context.Fail(JitFailureKind::UnsupportedCall, expression.GetExprKind());
+            return;
+        }
+        const auto& location = it->second;
         if (const auto* reg = location.AsRegister()) {
             const auto target = RegisterUtils::Get64BitRegister(reg->type);
             if (!target || !MemoryUtils::LoadValue(context, args[i], *target)) {

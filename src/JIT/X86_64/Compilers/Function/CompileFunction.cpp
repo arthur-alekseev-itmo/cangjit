@@ -24,6 +24,7 @@
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Type/Type.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
+#include "cangjie/Utils/CheckUtils.h"
 
 namespace Cangjie::JIT::X86_64 {
 
@@ -299,6 +300,7 @@ bool CompileFunction::SaveParameter(FunctionContext& context, const ParameterPla
     const bool floating = type->GetTypeKind() == CHIR::Type::TYPE_FLOAT32 ||
         type->GetTypeKind() == CHIR::Type::TYPE_FLOAT64;
     const auto location = placements.locations.find(parameter);
+    CJC_ASSERT(location != placements.locations.end());
     const auto id = context.GetValueNumeration().GetId(parameter);
     if ((!width && !floating) || location == placements.locations.end() || !id ||
         *id >= context.GetRegisterAllocation().GetLocationCount() ||

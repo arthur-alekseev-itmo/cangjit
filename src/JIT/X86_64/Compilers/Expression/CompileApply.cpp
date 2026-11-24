@@ -16,6 +16,7 @@
 #include "cangjie/CHIR/IR/Expression/Terminator.h"
 #include "cangjie/CHIR/IR/Type/Type.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
+#include "cangjie/Utils/CheckUtils.h"
 
 #include <algorithm>
 #include <limits>
@@ -144,7 +145,13 @@ bool PlaceArguments(FunctionContext& context, const CHIR::ApplyBase& expression,
     MemoryUtils::ReserveStack(context, placement.stackSize);
     const auto& parameters = callee.GetParams();
     for (size_t i = 0; i < parameters.size(); ++i) {
-        const auto* stack = placement.locations.find(parameters[i])->second.AsIncomingStack();
+        const auto location = placement.locations.find(parameters[i]);
+        CJC_ASSERT(location != placement.locations.end());
+        if (location == placement.locations.end()) {
+            context.Fail(JitFailureKind::UnsupportedCallingConvention);
+            return false;
+        }
+        const auto* stack = location->second.AsIncomingStack();
         if (!stack) {
             continue;
         }
@@ -154,7 +161,13 @@ bool PlaceArguments(FunctionContext& context, const CHIR::ApplyBase& expression,
         }
     }
     for (size_t i = 0; i < parameters.size(); ++i) {
-        const auto& location = placement.locations.find(parameters[i])->second;
+        const auto it = placement.locations.find(parameters[i]);
+        CJC_ASSERT(it != placement.locations.end());
+        if (it == placement.locations.end()) {
+            context.Fail(JitFailureKind::UnsupportedCallingConvention);
+            return false;
+        }
+        const auto& location = it->second;
         if (const auto* reg = location.AsRegister()) {
             const auto target = RegisterUtils::Get64BitRegister(reg->type);
             if (!target || !MemoryUtils::LoadValue(context, expression.GetOperand(i + 1), *target)) {

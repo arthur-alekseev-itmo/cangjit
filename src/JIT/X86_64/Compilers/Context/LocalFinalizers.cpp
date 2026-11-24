@@ -17,6 +17,7 @@
 #include "cangjie/CHIR/IR/Expression/Terminator.h"
 #include "cangjie/CHIR/IR/Type/ClassDef.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
+#include "cangjie/Utils/CheckUtils.h"
 
 namespace Cangjie::JIT::X86_64 {
 bool LocalFinalizers::Prepare()
@@ -62,6 +63,8 @@ bool LocalFinalizers::PrepareAllocation(const CHIR::Expression& expression)
     }
     for (const auto& site : frontier.Value()) {
         const auto* after = std::get<0>(site);
+        CJC_ASSERT(after ? (!std::get<1>(site) && !std::get<2>(site)) :
+            (std::get<1>(site) && std::get<2>(site)));
         if (after) {
             finalizersAfter[after].push_back(allocation.GetResult());
             continue;

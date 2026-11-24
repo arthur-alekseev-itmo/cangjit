@@ -18,6 +18,7 @@
 #include "../Utils/StackFrameUtils.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
+#include "cangjie/Utils/CheckUtils.h"
 
 namespace Cangjie::JIT::X86_64 {
 namespace {
@@ -189,6 +190,7 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
             }
         }
     }
+    CJC_ASSERT(found);
     if (!found) {
         return SafepointLivenessResult::Failure("safepoint expression is absent from its block");
     }
@@ -334,6 +336,10 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
     perRoot.reserve(gc.slots.size());
     for (auto slot : gc.slots) {
         auto it = std::find_if(roots.begin(), roots.end(), [&](Id id) { return offset(id) == slot; });
+        CJC_ASSERT(it != roots.end());
+        if (it == roots.end()) {
+            return SafepointLivenessResult::Failure("safepoint root has no corresponding value");
+        }
         auto values = derived[*it];
         sortUnique(values);
         perRoot.push_back({0, std::move(values)});

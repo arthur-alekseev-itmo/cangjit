@@ -10,6 +10,7 @@
 #include "../Context/FunctionContext.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Type/Type.h"
+#include "cangjie/Utils/CheckUtils.h"
 
 #include <cstdint>
 
@@ -133,7 +134,7 @@ void EmitFloatComparison(asmjit::x86::Assembler& a, CHIR::BinaryExprKind kind, b
         case K::LE: a.setbe(al); break;
         case K::GT: a.seta(al); break;
         case K::GE: a.setae(al); break;
-        default: return;
+        default: CJC_ASSERT(false); return;
     }
     // Unordered comparisons are true only for !=.
     if (kind == K::NOTEQUAL) {
@@ -155,7 +156,7 @@ void EmitFloatArithmetic(asmjit::x86::Assembler& a, CHIR::BinaryExprKind kind, b
         case K::SUB: if (single) a.subss(xmm0, xmm1); else a.subsd(xmm0, xmm1); break;
         case K::MUL: if (single) a.mulss(xmm0, xmm1); else a.mulsd(xmm0, xmm1); break;
         case K::DIV: if (single) a.divss(xmm0, xmm1); else a.divsd(xmm0, xmm1); break;
-        default: break;
+        default: CJC_ASSERT(false); break;
     }
 }
 
@@ -164,7 +165,8 @@ void CompileFloatBinary(FunctionContext& ctx, const CHIR::BinaryExpressionBase& 
 {
     using K = CHIR::BinaryExprKind;
     const auto kind = expr.GetOpKind();
-    const bool comparison = kind >= K::LT && kind <= K::NOTEQUAL;
+    const bool comparison = kind == K::LT || kind == K::GT || kind == K::LE || kind == K::GE ||
+        kind == K::EQUAL || kind == K::NOTEQUAL;
     if (!comparison && kind != K::ADD && kind != K::SUB && kind != K::MUL && kind != K::DIV) {
         ctx.Fail(JitFailureKind::UnsupportedBinaryOperation);
         return;

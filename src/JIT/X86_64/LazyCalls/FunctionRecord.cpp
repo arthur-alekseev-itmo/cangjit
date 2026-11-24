@@ -6,6 +6,8 @@
 
 #include "FunctionRecord.h"
 
+#include "cangjie/Utils/CheckUtils.h"
+
 namespace Cangjie::JIT::X86_64 {
 FunctionRecord::FunctionRecord(const CHIR::Function& function) noexcept : function(function)
 {
@@ -19,6 +21,7 @@ bool FunctionRecord::Initialize(CodeAddress newEntryStub)
     if (state != FunctionState::UNINITIALIZED) {
         return entryStub == newEntryStub;
     }
+    CJC_ASSERT(entryStub == 0 && compiledTarget == 0);
     entryStub = newEntryStub;
     state = FunctionState::UNCOMPILED;
     return true;
@@ -56,6 +59,7 @@ bool FunctionRecord::BeginCompilation()
     if (state != FunctionState::UNCOMPILED) {
         return false;
     }
+    CJC_ASSERT(entryStub != 0 && compiledTarget == 0);
     error = "function materialization failed";
     state = FunctionState::COMPILING;
     return true;
@@ -66,6 +70,7 @@ CompilationResult FunctionRecord::CompleteCompilation(CompilationResult result)
     if (state != FunctionState::COMPILING) {
         return CompilationResult::Failure({"function is not being materialized"});
     }
+    CJC_ASSERT(entryStub != 0 && compiledTarget == 0);
 
     if (!result) {
         error.swap(result.Error().message);
@@ -79,8 +84,9 @@ CompilationResult FunctionRecord::CompleteCompilation(CompilationResult result)
         state = FunctionState::READY;
         return result;
     }
-    result = CompilationResult::Failure({"function materializer returned an invalid target"});
-    return result;
+    state = FunctionState::FAILED;
+    error = "function materializer returned an invalid target";
+    return CompilationResult::Failure({error});
 }
 
 void FunctionRecord::FailCompilation() noexcept

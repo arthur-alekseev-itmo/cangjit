@@ -6,6 +6,8 @@
 
 #include "FunctionResolver.h"
 
+#include "cangjie/Utils/CheckUtils.h"
+
 #include <exception>
 #include <utility>
 
@@ -19,6 +21,7 @@ CompilationResult FunctionResolver::Resolve(FunctionRecord& record, Materialize 
         return CompilationResult::Failure({"recursive materialization of the same function"});
     }
     if (record.GetState() == FunctionState::READY) {
+        CJC_ASSERT(record.GetCompiledTarget() != 0 && record.GetCompiledTarget() != record.GetEntryStub());
         return CompilationResult::Success(record.GetCompiledTarget());
     }
     if (record.GetState() == FunctionState::FAILED) {
@@ -30,6 +33,7 @@ CompilationResult FunctionResolver::Resolve(FunctionRecord& record, Materialize 
     if (!record.BeginCompilation()) {
         return CompilationResult::Failure({"function cannot be materialized"});
     }
+    CJC_ASSERT(record.GetState() == FunctionState::COMPILING);
 
     try {
         auto result = [&]() -> CompilationResult {
