@@ -48,10 +48,7 @@ bool FunctionContext::InitializeAssembler()
     if (error != asmjit::kErrorOk) {
         return false;
     }
-    if (auto* logger = globalContext.GetLogger()) {
-        logger->logf("[JIT] assembly function %s\n", function->GetIdentifier().c_str());
-        code.setLogger(logger);
-    }
+    globalContext.GetLogger().AttachAssemblyLogger(code, function->GetIdentifier());
     code.setErrorHandler(&emitterErrorHandler);
     error = code.attach(&assembler);
     if (error != asmjit::kErrorOk) {

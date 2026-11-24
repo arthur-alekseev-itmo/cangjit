@@ -5,7 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "JitRuntimeBindings.h"
-#include "../X86_64/Compilers/Context/DebugConfig.h"
+#include "../X86_64/Compilers/Context/Logger.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -198,7 +198,7 @@ BindingResult JitRuntimeBindings::InitializeRuntime(const ::RuntimeParam* params
         return BindingResult::Success();
     }
     int result;
-    if constexpr (DEFAULT_DEBUG_CONFIG.runtime_log_mode == RuntimeLogMode::OFF) {
+    if constexpr (Logger::DefaultConfig().runtime_log_mode == RuntimeLogMode::OFF) {
         auto quietParams = *params;
         quietParams.logParam.logLevel = RTLOG_OFF;
         result = InitRuntime(&quietParams);

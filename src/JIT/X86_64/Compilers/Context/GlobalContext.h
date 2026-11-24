@@ -7,9 +7,7 @@
 #ifndef CANGJIE_JIT_X86_64_COMPILERS_CONTEXT_GLOBAL_CONTEXT_H
 #define CANGJIE_JIT_X86_64_COMPILERS_CONTEXT_GLOBAL_CONTEXT_H
 
-#include <asmjit/core.h>
-#include <cstdio>
-#include "DebugConfig.h"
+#include "Logger.h"
 
 
 #include "../../../Runtime/JitRuntime.h"
@@ -25,7 +23,6 @@ public:
     explicit GlobalContext(JitRuntime& jitRuntime)
         : jitRuntime(jitRuntime), allocatorParams(MakeAllocatorParams()), runtime(&allocatorParams)
     {
-        logger.addFlags(asmjit::FormatFlags::kMachineCode | asmjit::FormatFlags::kHexImms);
     }
     ~GlobalContext() { jitRuntime.CloseOrTerminate(); }
 
@@ -46,15 +43,11 @@ public:
         return jitRuntime.IsStackGrowthEnabled();
     }
 
-    bool IsDebugEnabled(FuncPrintMode mode) const noexcept
+    Logger& GetLogger() noexcept
     {
-        return IsEnabled(debugConfig.func_print_mode, mode);
+        return logger;
     }
 
-    asmjit::Logger* GetLogger() noexcept
-    {
-        return IsDebugEnabled(FuncPrintMode::ASM) ? &logger : nullptr;
-    }
 
     CHIR::CHIRBuilder& GetCHIRBuilder() noexcept
     {
@@ -104,8 +97,7 @@ private:
     FunctionRegistry functionRegistry;
     LazyCallSiteRegistry lazyCallSites;
     FunctionResolver functionResolver;
-    asmjit::FileLogger logger{stderr};
-    DebugConfig debugConfig{DEFAULT_DEBUG_CONFIG};
+    Logger logger;
 };
 } // namespace Cangjie::JIT::X86_64
 
