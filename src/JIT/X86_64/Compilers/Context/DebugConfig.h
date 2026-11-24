@@ -16,6 +16,7 @@ enum class FuncPrintMode : uint8_t {
     ENTRY = 1 << 1,
     REGALLOC = 1 << 2,
     LIVENESS = 1 << 3,
+    ALL = 0b1111,
 };
 
 constexpr FuncPrintMode operator|(FuncPrintMode left, FuncPrintMode right) noexcept
@@ -31,7 +32,7 @@ struct DebugConfig {
 };
 
 // Edit these values and rebuild to configure JIT diagnostics.
-inline constexpr DebugConfig DEFAULT_DEBUG_CONFIG{FuncPrintMode::NONE, RuntimeLogMode::ON};
+inline constexpr DebugConfig DEFAULT_DEBUG_CONFIG{FuncPrintMode::ASM, RuntimeLogMode::ON};
 
 constexpr bool IsEnabled(FuncPrintMode modes, FuncPrintMode mode) noexcept
 {

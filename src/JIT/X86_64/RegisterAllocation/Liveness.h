@@ -23,7 +23,6 @@ class Expression;
 namespace Cangjie::JIT::X86_64 {
 class LivenessAnalysis;
 
-// CHIR blocks and expressions must remain alive and unchanged for this result's lifetime.
 class Liveness final {
 public:
     using Word = InterferenceGraph::BitmapWord;
