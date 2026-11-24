@@ -34,21 +34,8 @@ void CompileNumericCast::Compile(FunctionContext& context, const CHIR::NumericCa
     const bool sourceFloat = sourceKind == CHIR::Type::TYPE_FLOAT32 || sourceKind == CHIR::Type::TYPE_FLOAT64;
     const bool targetFloat = targetKind == CHIR::Type::TYPE_FLOAT32 || targetKind == CHIR::Type::TYPE_FLOAT64;
     if (sourceFloat && targetFloat) {
-        if (!MemoryUtils::LoadFloatValue(context, source, asmjit::x86::xmm0, asmjit::x86::rax)) {
-            return;
-        }
-        auto& assembler = context.GetAssembler();
-        if (sourceKind != targetKind) {
-            if (targetKind == CHIR::Type::TYPE_FLOAT64) {
-                assembler.cvtss2sd(asmjit::x86::xmm0, asmjit::x86::xmm0);
-            } else {
-                assembler.cvtsd2ss(asmjit::x86::xmm0, asmjit::x86::xmm0);
-            }
-        }
-        MemoryUtils::StoreFloatValue(context, result, asmjit::x86::xmm0, asmjit::x86::rax);
-        if (normal && !context.GetFailure()) {
-            assembler.jmp(context.GetLocalFinalizers().GetEdgeLabel(normal));
-        }
+        CompileFloatCast(context, source, result, sourceKind != targetKind,
+            targetKind == CHIR::Type::TYPE_FLOAT64, normal);
         return;
     }
     const auto sourceWidth = RegisterUtils::IntegerWidth(*sourceType);
@@ -114,6 +101,24 @@ void CompileNumericCast::Compile(FunctionContext& context, const CHIR::NumericCa
     }
     RegisterUtils::NormalizeInteger(assembler, asmjit::x86::rax, targetWidth, targetSigned);
     MemoryUtils::StoreValue(context, result, asmjit::x86::rax);
+    if (normal && !context.GetFailure()) {
+        assembler.jmp(context.GetLocalFinalizers().GetEdgeLabel(normal));
+    }
+}
+
+void CompileNumericCast::CompileFloatCast(FunctionContext& context, const CHIR::Value* source, const CHIR::Value* result,
+    bool needsConversion, bool targetIsFloat64, const CHIR::Block* normal)
+{
+    if (!MemoryUtils::LoadFloatValue(context, source, asmjit::x86::xmm0, asmjit::x86::rax)) {
+        return;
+    }
+    auto& assembler = context.GetAssembler();
+    if (needsConversion && targetIsFloat64) {
+        assembler.cvtss2sd(asmjit::x86::xmm0, asmjit::x86::xmm0);
+    } else if (needsConversion) {
+        assembler.cvtsd2ss(asmjit::x86::xmm0, asmjit::x86::xmm0);
+    }
+    MemoryUtils::StoreFloatValue(context, result, asmjit::x86::xmm0, asmjit::x86::rax);
     if (normal && !context.GetFailure()) {
         assembler.jmp(context.GetLocalFinalizers().GetEdgeLabel(normal));
     }

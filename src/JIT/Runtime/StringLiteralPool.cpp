@@ -9,7 +9,6 @@
 #include <cstring>
 #include <limits>
 #include <utility>
-#include <variant>
 
 #include "JitRuntimeBindings.h"
 

@@ -7,9 +7,8 @@
 #ifndef CANGJIE_JIT_X86_64_LOCATION_H
 #define CANGJIE_JIT_X86_64_LOCATION_H
 
+#include <cstddef>
 #include <cstdint>
-#include <string>
-#include <utility>
 #include <variant>
 
 namespace Cangjie::JIT::X86_64 {
@@ -46,14 +45,6 @@ class Location final {
 public:
     using Index = size_t;
 
-    enum class Kind : uint8_t {
-        REGISTER,
-        STACK,
-        GLOBAL,
-        SIMD_REGISTER,
-        INCOMING_STACK,
-    };
-
     struct RegisterLocation {
         Index index;
         RegisterType type;
@@ -62,10 +53,6 @@ public:
 
     struct StackLocation {
         Index index;
-    };
-
-    struct GlobalLocation {
-        std::string name;
     };
 
     struct SimdRegisterLocation {
@@ -77,8 +64,7 @@ public:
         Index index;
     };
 
-    using Value = std::variant<RegisterLocation, StackLocation, GlobalLocation, SimdRegisterLocation,
-        IncomingStackLocation>;
+    using Value = std::variant<RegisterLocation, StackLocation, SimdRegisterLocation, IncomingStackLocation>;
 
     static Location Register(Index index, RegisterType type, OperandWidth width) noexcept
     {
@@ -88,11 +74,6 @@ public:
     static Location Stack(Index index) noexcept
     {
         return Location(StackLocation{index});
-    }
-
-    static Location Global(std::string name)
-    {
-        return Location(GlobalLocation{std::move(name)});
     }
 
     static Location SimdRegister(Index index, OperandWidth width) noexcept
@@ -105,24 +86,9 @@ public:
         return Location(IncomingStackLocation{index});
     }
 
-    Kind GetKind() const noexcept
-    {
-        return static_cast<Kind>(value.index());
-    }
-
-    bool IsRegister() const noexcept
-    {
-        return std::holds_alternative<RegisterLocation>(value);
-    }
-
     bool IsStack() const noexcept
     {
         return std::holds_alternative<StackLocation>(value);
-    }
-
-    bool IsGlobal() const noexcept
-    {
-        return std::holds_alternative<GlobalLocation>(value);
     }
 
     const RegisterLocation* AsRegister() const noexcept
@@ -135,11 +101,6 @@ public:
         return std::get_if<StackLocation>(&value);
     }
 
-    const GlobalLocation* AsGlobal() const noexcept
-    {
-        return std::get_if<GlobalLocation>(&value);
-    }
-
     const SimdRegisterLocation* AsSimdRegister() const noexcept
     {
         return std::get_if<SimdRegisterLocation>(&value);
@@ -150,21 +111,12 @@ public:
         return std::get_if<IncomingStackLocation>(&value);
     }
 
-    const Value& GetValue() const noexcept
-    {
-        return value;
-    }
-
 private:
     explicit Location(RegisterLocation location) noexcept : value(location)
     {
     }
 
     explicit Location(StackLocation location) noexcept : value(location)
-    {
-    }
-
-    explicit Location(GlobalLocation location) : value(std::move(location))
     {
     }
 

@@ -58,9 +58,7 @@ public:
     void Fail(JitFailureKind kind, std::optional<CHIR::ExprKind> expressionKind = std::nullopt) noexcept;
     const std::optional<JitFailure>& GetFailure() const noexcept;
     const CHIR::Function* GetFunction() const noexcept;
-    std::vector<const CHIR::Function*>& GetFunctionsToStub() noexcept;
     std::vector<PendingLazyCallSite>& GetLazyCallSites() noexcept;
-    const std::vector<const CHIR::Function*>& GetFunctionsToStub() const noexcept;
     const ValueNumeration& GetValueNumeration() const noexcept;
     const Liveness& GetLiveness() const noexcept { return liveness; }
     const RegisterAllocation& GetRegisterAllocation() const noexcept;
@@ -95,7 +93,6 @@ private:
     asmjit::Label epilogueLabel;
     std::unordered_map<const CHIR::Block*, asmjit::Label> blockLabels;
     const CHIR::Function* function;
-    std::vector<const CHIR::Function*> functionsToStub;
     std::vector<PendingLazyCallSite> lazyCallSites;
     ValueNumeration valueNumeration;
     Liveness liveness;

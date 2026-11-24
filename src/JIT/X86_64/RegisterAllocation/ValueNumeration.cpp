@@ -79,21 +79,6 @@ ValueNumeration::Id ValueNumeration::GetLocalOffset() const noexcept
     return localOffset;
 }
 
-ValueNumeration::Id ValueNumeration::GetEndOffset() const noexcept
-{
-    return endOffset;
-}
-
-ValueNumeration::Id ValueNumeration::GetParameterCount() const noexcept
-{
-    return localOffset - parameterOffset;
-}
-
-ValueNumeration::Id ValueNumeration::GetLocalCount() const noexcept
-{
-    return endOffset - localOffset;
-}
-
 ValueNumeration::Id ValueNumeration::GetValueCount() const noexcept
 {
     return endOffset - parameterOffset;

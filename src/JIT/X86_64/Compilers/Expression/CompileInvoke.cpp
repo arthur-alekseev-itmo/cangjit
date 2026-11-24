@@ -102,7 +102,7 @@ bool EmitTarget(FunctionContext& context, const CHIR::DynamicDispatch& expressio
         for (auto* current = def; current; current = current->GetSuperClassDef()) {
             ++depth;
         }
-        if (depth == 0 || depth - 1 > static_cast<size_t>(std::numeric_limits<int32_t>::max()) / sizeof(uint64_t)) {
+        if (depth - 1 > static_cast<size_t>(std::numeric_limits<int32_t>::max()) / sizeof(uint64_t)) {
             context.Fail(JitFailureKind::UnsupportedCall, expression.GetExprKind());
             return false;
         }

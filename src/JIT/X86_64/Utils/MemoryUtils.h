@@ -16,6 +16,7 @@
 
 namespace Cangjie::CHIR {
 class Type;
+class LiteralValue;
 class Value;
 }
 
@@ -47,6 +48,12 @@ public:
 
     static bool Move(FunctionContext& context, const Location& destination, const Location& source,
         const asmjit::x86::Gp& scratch);
+
+private:
+    static bool LoadLiteral(FunctionContext& context, const CHIR::LiteralValue& literal, const asmjit::x86::Gp& target);
+    static bool LoadFloatLiteral(
+        FunctionContext& context, const CHIR::LiteralValue& literal, const asmjit::x86::Gp& target);
+    static bool LoadGlobal(FunctionContext& context, const CHIR::Value& value, const asmjit::x86::Gp& target);
 };
 } // namespace Cangjie::JIT::X86_64
 

@@ -31,50 +31,64 @@ bool LocalFinalizers::Prepare()
         if (block->GetFuncOrLambdaBody() != body) {
             continue;
         }
-        for (const auto* expression : block->GetExpressions()) {
-            if (expression->GetExprKind() != CHIR::ExprKind::ALLOCATE &&
-                expression->GetExprKind() != CHIR::ExprKind::TRY_ALLOCATE) {
-                continue;
-            }
-            const auto& allocation = static_cast<const CHIR::AllocateBase&>(*expression);
-            const auto* type = allocation.GetType();
-            if (!type || !type->IsClass() || !type->IsLocalRegion()) {
-                continue;
-            }
-            const auto* def = static_cast<const CHIR::ClassType*>(type)->GetClassDef();
-            if (!def || !def->GetFinalizer()) {
-                continue;
-            }
-            auto frontier = ComputeLocalFinalizerFrontier(*function, allocation);
-            if (!frontier || !allocation.GetResult()) {
-                context.Fail(JitFailureKind::UnsupportedLocalFinalizer, expression->GetExprKind());
+        for (size_t i = 0; i < block->GetExpressionsNum(); ++i) {
+            if (!PrepareAllocation(*block->GetExpressionByIdx(i))) {
                 return false;
-            }
-            for (const auto& site : frontier.Value()) {
-                const auto* after = std::get<0>(site);
-                const auto* predecessor = std::get<1>(site);
-                const auto* successor = std::get<2>(site);
-                if (after) {
-                    finalizersAfter[after].push_back(allocation.GetResult());
-                    continue;
-                }
-                auto edge = std::find_if(finalizerEdges.begin(), finalizerEdges.end(),
-                    [&](const Edge& item) {
-                        return item.predecessor == predecessor && item.successor == successor;
-                    });
-                if (edge == finalizerEdges.end()) {
-                    auto label = context.GetAssembler().newLabel();
-                    if (!predecessor || !successor || !label.isValid()) {
-                        context.Fail(JitFailureKind::BlockLabelCreationFailed);
-                        return false;
-                    }
-                    finalizerEdges.push_back({predecessor, successor, label, {}});
-                    edge = std::prev(finalizerEdges.end());
-                }
-                edge->objects.push_back(allocation.GetResult());
             }
         }
     }
+    return true;
+}
+
+bool LocalFinalizers::PrepareAllocation(const CHIR::Expression& expression)
+{
+    if (expression.GetExprKind() != CHIR::ExprKind::ALLOCATE &&
+        expression.GetExprKind() != CHIR::ExprKind::TRY_ALLOCATE) {
+        return true;
+    }
+    const auto& allocation = static_cast<const CHIR::AllocateBase&>(expression);
+    const auto* type = allocation.GetType();
+    if (!type || !type->IsClass() || !type->IsLocalRegion()) {
+        return true;
+    }
+    const auto* def = static_cast<const CHIR::ClassType*>(type)->GetClassDef();
+    if (!def || !def->GetFinalizer()) {
+        return true;
+    }
+    auto frontier = ComputeLocalFinalizerFrontier(*context.GetFunction(), allocation);
+    if (!frontier || !allocation.GetResult()) {
+        context.Fail(JitFailureKind::UnsupportedLocalFinalizer, expression.GetExprKind());
+        return false;
+    }
+    for (const auto& site : frontier.Value()) {
+        const auto* after = std::get<0>(site);
+        if (after) {
+            finalizersAfter[after].push_back(allocation.GetResult());
+            continue;
+        }
+        if (!AddFinalizerEdge(std::get<1>(site), std::get<2>(site), allocation.GetResult())) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool LocalFinalizers::AddFinalizerEdge(
+    const CHIR::Block* predecessor, const CHIR::Block* successor, const CHIR::Value* object)
+{
+    auto edge = std::find_if(finalizerEdges.begin(), finalizerEdges.end(), [&](const Edge& item) {
+        return item.predecessor == predecessor && item.successor == successor;
+    });
+    if (edge == finalizerEdges.end()) {
+        auto label = context.GetAssembler().newLabel();
+        if (!predecessor || !successor || !label.isValid()) {
+            context.Fail(JitFailureKind::BlockLabelCreationFailed);
+            return false;
+        }
+        finalizerEdges.push_back({predecessor, successor, label, {}});
+        edge = std::prev(finalizerEdges.end());
+    }
+    edge->objects.push_back(object);
     return true;
 }
 

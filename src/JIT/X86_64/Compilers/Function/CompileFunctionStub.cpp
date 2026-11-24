@@ -11,12 +11,12 @@
 #include <array>
 #include <cstdio>
 #include <cstdlib>
-#include <limits>
 #include <optional>
 #include <vector>
 
 #include "../Context/GlobalContext.h"
 #include "../../../Runtime/JitMetadataBuilder.h"
+#include "../../Utils/StackFrameUtils.h"
 #include "../../Utils/SystemVCallingConvention.h"
 #include "CompileFunction.h"
 #include "cangjie/CHIR/IR/Annotation.h"
@@ -121,10 +121,11 @@ bool SupportedSignature(const CHIR::Function& function, std::vector<int32_t>& gc
             }
             gcSlots.push_back(-16 - static_cast<int32_t>(reg->index * 8));
         } else if (const auto* stack = location->second.AsIncomingStack()) {
-            if (stack->index > (std::numeric_limits<int32_t>::max() - 16) / 8) {
+            const auto offset = StackFrameUtils::GetIncomingArgumentOffset(stack->index);
+            if (!offset) {
                 return false;
             }
-            gcSlots.push_back(16 + static_cast<int32_t>(stack->index * 8));
+            gcSlots.push_back(*offset);
         } else {
             return false;
         }

@@ -8,7 +8,6 @@
 
 #include <cstdio>
 #include <iostream>
-#include <limits>
 #include <utility>
 
 #include "../../RegisterAllocation/LivenessAnalysis.h"
@@ -92,6 +91,11 @@ CompilationResult CompileFunction::CompileToAddressImpl() const
     if (context.GetError() != asmjit::kErrorOk) {
         return CompilationResult::Failure({asmjit::DebugUtils::errorAsString(context.GetError())});
     }
+    return Publish(context);
+}
+
+CompilationResult CompileFunction::Publish(FunctionContext& context) const
+{
     auto& assembler = context.GetAssembler();
     constexpr size_t PREFIX_SIZE = sizeof(uint32_t);
     if (assembler.offset() <= PREFIX_SIZE || assembler.offset() - PREFIX_SIZE > UINT32_MAX) {
@@ -274,61 +278,65 @@ void CompileFunction::Compile(FunctionContext& context) const
 
 bool CompileFunction::SaveParameters(FunctionContext& context, const ParameterPlacement& placements) const
 {
-    // Copy ABI arguments into their allocated stack locations for use by the function body.
     for (const auto* parameter : function.GetParams()) {
-        if (!parameter || !parameter->GetType()) {
-            context.Fail(JitFailureKind::UnsupportedParameters);
-            return false;
-        }
-        const auto* type = parameter->GetType();
-        const bool pointer = type->IsRef() || type->IsCPointer() || type->IsCString();
-        const auto width = pointer ? 64U : type->IsBoolean() ? 8U : RegisterUtils::IntegerWidth(*type);
-        const bool floating = type->GetTypeKind() == CHIR::Type::TYPE_FLOAT32 ||
-            type->GetTypeKind() == CHIR::Type::TYPE_FLOAT64;
-        const auto location = placements.locations.find(parameter);
-        const auto id = context.GetValueNumeration().GetId(parameter);
-        if ((!width && !floating) || location == placements.locations.end() || !id ||
-            *id >= context.GetRegisterAllocation().GetLocationCount() ||
-            !context.GetRegisterAllocation().GetLocation(*id).IsStack()) {
-            context.Fail(JitFailureKind::UnsupportedParameters);
-            return false;
-        }
-        auto& a = context.GetAssembler();
-        if (const auto* reg = location->second.AsRegister()) {
-            const auto source = RegisterUtils::Get64BitRegister(reg->type);
-            if (!source) {
-                context.Fail(JitFailureKind::UnsupportedParameters);
-                return false;
-            }
-            a.mov(asmjit::x86::rax, *source);
-        } else if (const auto* simd = location->second.AsSimdRegister()) {
-            const auto source = RegisterUtils::GetArgumentSimdRegister(simd->index);
-            if (!floating || !source || !MemoryUtils::StoreFloatValue(context, parameter, *source, asmjit::x86::rax)) {
-                context.Fail(JitFailureKind::UnsupportedParameters);
-                return false;
-            }
-            continue;
-        } else if (const auto* stack = location->second.AsIncomingStack()) {
-            constexpr size_t BASE_OFFSET = 2 * sizeof(uint64_t);
-            if (stack->index > (static_cast<size_t>(std::numeric_limits<int32_t>::max()) - BASE_OFFSET) /
-                    sizeof(uint64_t)) {
-                context.Fail(JitFailureKind::UnsupportedParameters);
-                return false;
-            }
-            const auto offset = static_cast<int32_t>(BASE_OFFSET + stack->index * sizeof(uint64_t));
-            a.mov(asmjit::x86::rax, asmjit::x86::qword_ptr(asmjit::x86::rbp, offset));
-        } else {
-            context.Fail(JitFailureKind::UnsupportedParameters);
-            return false;
-        }
-        if (width) {
-            RegisterUtils::NormalizeInteger(a, asmjit::x86::rax, width, type->IsSignedInteger());
-        }
-        if (!MemoryUtils::StoreValue(context, parameter, asmjit::x86::rax)) {
+        if (!SaveParameter(context, placements, parameter)) {
             return false;
         }
     }
     return true;
+}
+
+bool CompileFunction::SaveParameter(FunctionContext& context, const ParameterPlacement& placements,
+    const CHIR::Parameter* parameter) const
+{
+    if (!parameter || !parameter->GetType()) {
+        context.Fail(JitFailureKind::UnsupportedParameters);
+        return false;
+    }
+    const auto* type = parameter->GetType();
+    const bool pointer = type->IsRef() || type->IsCPointer() || type->IsCString();
+    const auto width = pointer ? 64U : type->IsBoolean() ? 8U : RegisterUtils::IntegerWidth(*type);
+    const bool floating = type->GetTypeKind() == CHIR::Type::TYPE_FLOAT32 ||
+        type->GetTypeKind() == CHIR::Type::TYPE_FLOAT64;
+    const auto location = placements.locations.find(parameter);
+    const auto id = context.GetValueNumeration().GetId(parameter);
+    if ((!width && !floating) || location == placements.locations.end() || !id ||
+        *id >= context.GetRegisterAllocation().GetLocationCount() ||
+        !context.GetRegisterAllocation().GetLocation(*id).IsStack()) {
+        context.Fail(JitFailureKind::UnsupportedParameters);
+        return false;
+    }
+    if (const auto* simd = location->second.AsSimdRegister()) {
+        const auto source = RegisterUtils::GetArgumentSimdRegister(simd->index);
+        if (!floating || !source || !MemoryUtils::StoreFloatValue(context, parameter, *source, asmjit::x86::rax)) {
+            context.Fail(JitFailureKind::UnsupportedParameters);
+            return false;
+        }
+        return true;
+    }
+    auto& assembler = context.GetAssembler();
+    if (const auto* reg = location->second.AsRegister()) {
+        const auto source = RegisterUtils::Get64BitRegister(reg->type);
+        if (!source) {
+            context.Fail(JitFailureKind::UnsupportedParameters);
+            return false;
+        }
+        assembler.mov(asmjit::x86::rax, *source);
+    } else if (const auto* stack = location->second.AsIncomingStack()) {
+        const auto offset = StackFrameUtils::GetIncomingArgumentOffset(stack->index);
+        if (!offset) {
+            context.Fail(JitFailureKind::UnsupportedParameters);
+            return false;
+        }
+        assembler.mov(asmjit::x86::rax, asmjit::x86::qword_ptr(asmjit::x86::rbp, *offset));
+    } else {
+        context.Fail(JitFailureKind::UnsupportedParameters);
+        return false;
+    }
+    if (width) {
+        RegisterUtils::NormalizeInteger(assembler, asmjit::x86::rax, width, type->IsSignedInteger());
+    }
+    return MemoryUtils::StoreValue(context, parameter, asmjit::x86::rax);
 }
 
 bool CompileFunction::SaveHiddenTypeInfo(FunctionContext& context, const ParameterPlacement& placements) const
@@ -366,20 +374,20 @@ bool CompileFunction::SaveHiddenTypeInfoLocation(FunctionContext& context, const
             return false;
         }
         a.mov(asmjit::x86::qword_ptr(asmjit::x86::rbp, *offset), *source);
-    } else if (const auto* stack = location.AsIncomingStack()) {
-        constexpr size_t BASE_OFFSET = 2 * sizeof(uint64_t);
-        if (stack->index > (static_cast<size_t>(std::numeric_limits<int32_t>::max()) - BASE_OFFSET) /
-                sizeof(uint64_t)) {
-            context.Fail(JitFailureKind::UnsupportedCallingConvention);
-            return false;
-        }
-        const auto source = static_cast<int32_t>(BASE_OFFSET + stack->index * sizeof(uint64_t));
-        a.mov(asmjit::x86::rax, asmjit::x86::qword_ptr(asmjit::x86::rbp, source));
-        a.mov(asmjit::x86::qword_ptr(asmjit::x86::rbp, *offset), asmjit::x86::rax);
-    } else {
+        return true;
+    }
+    const auto* stack = location.AsIncomingStack();
+    if (!stack) {
         context.Fail(JitFailureKind::UnsupportedCallingConvention);
         return false;
     }
+    const auto source = StackFrameUtils::GetIncomingArgumentOffset(stack->index);
+    if (!source) {
+        context.Fail(JitFailureKind::UnsupportedCallingConvention);
+        return false;
+    }
+    a.mov(asmjit::x86::rax, asmjit::x86::qword_ptr(asmjit::x86::rbp, *source));
+    a.mov(asmjit::x86::qword_ptr(asmjit::x86::rbp, *offset), asmjit::x86::rax);
     return true;
 }
 

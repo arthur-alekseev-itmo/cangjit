@@ -10,6 +10,7 @@
 namespace Cangjie::CHIR {
 class NumericCastBase;
 class Block;
+class Value;
 }
 
 namespace Cangjie::JIT::X86_64 {
@@ -19,6 +20,10 @@ class CompileNumericCast final {
 public:
     static void Compile(FunctionContext& context, const CHIR::NumericCastBase& expression,
         const CHIR::Block* normal = nullptr, const CHIR::Block* unwind = nullptr);
+
+private:
+    static void CompileFloatCast(FunctionContext& context, const CHIR::Value* source, const CHIR::Value* result,
+        bool needsConversion, bool targetIsFloat64, const CHIR::Block* normal);
 };
 } // namespace Cangjie::JIT::X86_64
 

@@ -35,9 +35,6 @@ public:
 
     Id GetParameterOffset() const noexcept;
     Id GetLocalOffset() const noexcept;
-    Id GetEndOffset() const noexcept;
-    Id GetParameterCount() const noexcept;
-    Id GetLocalCount() const noexcept;
     Id GetValueCount() const noexcept;
 
 private:

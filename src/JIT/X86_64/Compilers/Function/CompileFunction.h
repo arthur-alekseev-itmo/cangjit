@@ -11,6 +11,7 @@
 
 namespace Cangjie::CHIR {
 class Function;
+class Parameter;
 class Type;
 }
 
@@ -30,12 +31,15 @@ public:
 
 private:
     CompilationResult CompileToAddressImpl() const;
+    CompilationResult Publish(FunctionContext& context) const;
     void PrintDebugInfo(const FunctionContext& context) const;
     void MakePrologue(FunctionContext& context) const;
     void MakeEpilogue(FunctionContext& context) const;
     bool SaveReturnValue(FunctionContext& context) const;
     void LoadReturnValueFromAddress(FunctionContext& context, const CHIR::Type& type, unsigned width) const;
     bool SaveParameters(FunctionContext& context, const ParameterPlacement& placements) const;
+    bool SaveParameter(FunctionContext& context, const ParameterPlacement& placements,
+        const CHIR::Parameter* parameter) const;
     bool SaveHiddenTypeInfo(FunctionContext& context, const ParameterPlacement& placements) const;
     bool SaveHiddenTypeInfoLocation(FunctionContext& context, const Location& location, size_t index) const;
 

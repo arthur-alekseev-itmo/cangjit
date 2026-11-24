@@ -30,4 +30,13 @@ std::optional<int32_t> StackFrameUtils::GetSlotOffset(size_t slot, size_t slotCo
     }
     return -static_cast<int32_t>((slot + 2) * SLOT_SIZE);
 }
+
+std::optional<int32_t> StackFrameUtils::GetIncomingArgumentOffset(size_t index) noexcept
+{
+    constexpr size_t BASE_OFFSET = 2 * SLOT_SIZE;
+    if (index > (static_cast<size_t>(std::numeric_limits<int32_t>::max()) - BASE_OFFSET) / SLOT_SIZE) {
+        return std::nullopt;
+    }
+    return static_cast<int32_t>(BASE_OFFSET + index * SLOT_SIZE);
+}
 } // namespace Cangjie::JIT::X86_64

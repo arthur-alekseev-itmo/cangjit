@@ -164,7 +164,6 @@ JitMetadataBuilder::EncodedBytes JitMetadataBuilder::BuildStackMap(std::vector<S
     for (auto l : lines) lineBits = std::max(lineBits, bitsNeeded(l));
     for (const auto& s : slots) {
         int64_t width = (int64_t{s.front()} - s.back()) / 8 + 1;
-        if (width > UINT32_MAX) return EncodedBytes::Failure("slot bitmap too large");
         slotBits = std::max(slotBits, static_cast<uint32_t>(width));
     }
     std::vector<uint8_t> map;

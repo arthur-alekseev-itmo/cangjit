@@ -32,6 +32,9 @@ private:
         asmjit::Label label;
         std::vector<const CHIR::Value*> objects;
     };
+    bool PrepareAllocation(const CHIR::Expression& expression);
+    bool AddFinalizerEdge(
+        const CHIR::Block* predecessor, const CHIR::Block* successor, const CHIR::Value* object);
     bool EmitRemovals(const std::vector<const CHIR::Value*>& objects, const CHIR::Expression& next);
 
     FunctionContext& context;

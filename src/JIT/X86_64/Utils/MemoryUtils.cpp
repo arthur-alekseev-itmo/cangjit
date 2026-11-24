@@ -84,61 +84,13 @@ bool MemoryUtils::LoadValue(FunctionContext& context, const CHIR::Value* value, 
     if (!IsMoveRegister(context, target)) {
         return false;
     }
-    auto& assembler = context.GetAssembler();
     if (value->IsLiteral()) {
-        auto* literal = static_cast<const CHIR::LiteralValue*>(value);
-        if (literal->IsBoolLiteral()) {
-            assembler.mov(target, static_cast<const CHIR::BoolLiteral*>(literal)->GetVal() ? 1 : 0);
-        } else if (literal->IsIntLiteral()) {
-            assembler.mov(target, asmjit::imm(static_cast<const CHIR::IntLiteral*>(literal)->GetUnsignedVal()));
-        } else if (literal->IsRuneLiteral()) {
-            assembler.mov(target, static_cast<uint32_t>(static_cast<const CHIR::RuneLiteral*>(literal)->GetVal()));
-        } else if (literal->IsNullLiteral()) {
-            assembler.xor_(target.r32(), target.r32());
-        } else if (literal->IsFloatLiteral() && value->GetType()) {
-            const auto val = static_cast<const CHIR::FloatLiteral*>(literal)->GetVal();
-            if (value->GetType()->GetTypeKind() == CHIR::Type::TYPE_FLOAT32) {
-                const float converted = static_cast<float>(val);
-                uint32_t bits;
-                std::memcpy(&bits, &converted, sizeof(bits));
-                assembler.mov(target, asmjit::imm(bits));
-            } else if (value->GetType()->GetTypeKind() == CHIR::Type::TYPE_FLOAT64) {
-                uint64_t bits;
-                std::memcpy(&bits, &val, sizeof(bits));
-                assembler.mov(target, asmjit::imm(bits));
-            } else {
-                context.Fail(JitFailureKind::UnsupportedLiteral);
-                return false;
-            }
-        } else {
-            context.Fail(JitFailureKind::UnsupportedLiteral);
-            return false;
-        }
-        return context.GetError() == asmjit::kErrorOk;
+        return LoadLiteral(context, static_cast<const CHIR::LiteralValue&>(*value), target);
     }
     if (value->IsGlobalVar()) {
-        if (!value->IsImportedVar()) {
-            context.Fail(JitFailureKind::UnsupportedPackageGlobal);
-            return false;
-        }
-        if (!context.GetGlobalContext().GetRuntimeBindings()
-                .EnsurePackage(static_cast<const CHIR::GlobalVar*>(value)->GetPackageName())) {
-            context.Fail(JitFailureKind::UnresolvedSymbol);
-            return false;
-        }
-        auto resolved = context.GetGlobalContext().GetRuntimeBindings().Resolve(value->GetIdentifierWithoutPrefix());
-        if (!resolved) {
-            context.Fail(JitFailureKind::UnresolvedSymbol);
-            return false;
-        }
-        const auto address = resolved.Value();
-        if (!address) {
-            context.Fail(JitFailureKind::UnresolvedSymbol);
-            return false;
-        }
-        assembler.mov(target, asmjit::imm(reinterpret_cast<uintptr_t>(address)));
-        return context.GetError() == asmjit::kErrorOk;
+        return LoadGlobal(context, *value, target);
     }
+    auto& assembler = context.GetAssembler();
     auto id = context.GetValueNumeration().GetId(value);
     if (!id || *id >= context.GetRegisterAllocation().GetLocationCount()) {
         context.Fail(JitFailureKind::UnallocatedOperand);
@@ -156,6 +108,73 @@ bool MemoryUtils::LoadValue(FunctionContext& context, const CHIR::Value* value, 
     } else {
         assembler.mov(target, source.memory);
     }
+    return context.GetError() == asmjit::kErrorOk;
+}
+
+bool MemoryUtils::LoadLiteral(
+    FunctionContext& context, const CHIR::LiteralValue& literal, const asmjit::x86::Gp& target)
+{
+    auto& assembler = context.GetAssembler();
+    if (literal.IsBoolLiteral()) {
+        assembler.mov(target, static_cast<const CHIR::BoolLiteral&>(literal).GetVal() ? 1 : 0);
+    } else if (literal.IsIntLiteral()) {
+        assembler.mov(target, asmjit::imm(static_cast<const CHIR::IntLiteral&>(literal).GetUnsignedVal()));
+    } else if (literal.IsRuneLiteral()) {
+        assembler.mov(target, static_cast<uint32_t>(static_cast<const CHIR::RuneLiteral&>(literal).GetVal()));
+    } else if (literal.IsNullLiteral()) {
+        assembler.xor_(target.r32(), target.r32());
+    } else if (literal.IsFloatLiteral()) {
+        return LoadFloatLiteral(context, literal, target);
+    } else {
+        context.Fail(JitFailureKind::UnsupportedLiteral);
+        return false;
+    }
+    return context.GetError() == asmjit::kErrorOk;
+}
+
+bool MemoryUtils::LoadFloatLiteral(
+    FunctionContext& context, const CHIR::LiteralValue& literal, const asmjit::x86::Gp& target)
+{
+    const auto* type = literal.GetType();
+    if (!type) {
+        context.Fail(JitFailureKind::UnsupportedLiteral);
+        return false;
+    }
+    const auto value = static_cast<const CHIR::FloatLiteral&>(literal).GetVal();
+    auto& assembler = context.GetAssembler();
+    if (type->GetTypeKind() == CHIR::Type::TYPE_FLOAT32) {
+        const float converted = static_cast<float>(value);
+        uint32_t bits;
+        std::memcpy(&bits, &converted, sizeof(bits));
+        assembler.mov(target, asmjit::imm(bits));
+    } else if (type->GetTypeKind() == CHIR::Type::TYPE_FLOAT64) {
+        uint64_t bits;
+        std::memcpy(&bits, &value, sizeof(bits));
+        assembler.mov(target, asmjit::imm(bits));
+    } else {
+        context.Fail(JitFailureKind::UnsupportedLiteral);
+        return false;
+    }
+    return context.GetError() == asmjit::kErrorOk;
+}
+
+bool MemoryUtils::LoadGlobal(FunctionContext& context, const CHIR::Value& value, const asmjit::x86::Gp& target)
+{
+    if (!value.IsImportedVar()) {
+        context.Fail(JitFailureKind::UnsupportedPackageGlobal);
+        return false;
+    }
+    auto& bindings = context.GetGlobalContext().GetRuntimeBindings();
+    if (!bindings.EnsurePackage(static_cast<const CHIR::GlobalVar&>(value).GetPackageName())) {
+        context.Fail(JitFailureKind::UnresolvedSymbol);
+        return false;
+    }
+    auto resolved = bindings.Resolve(value.GetIdentifierWithoutPrefix());
+    if (!resolved) {
+        context.Fail(JitFailureKind::UnresolvedSymbol);
+        return false;
+    }
+    context.GetAssembler().mov(target, asmjit::imm(reinterpret_cast<uintptr_t>(resolved.Value())));
     return context.GetError() == asmjit::kErrorOk;
 }
 

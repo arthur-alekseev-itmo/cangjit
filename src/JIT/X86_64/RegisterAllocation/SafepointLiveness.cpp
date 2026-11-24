@@ -8,8 +8,10 @@
 
 #include <algorithm>
 #include <functional>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "Liveness.h"
@@ -22,8 +24,6 @@ namespace {
 using Id = ValueNumeration::Id;
 using Bits = std::vector<unsigned char>;
 
-
-
 bool IsObjectType(const CHIR::Type& type)
 {
     if (!type.IsRef()) {
@@ -31,6 +31,70 @@ bool IsObjectType(const CHIR::Type& type)
     }
     const auto* base = static_cast<const CHIR::RefType&>(type).GetBaseType();
     return base && (base->IsClass() || base->IsRawArray() || base->IsBox());
+}
+
+std::optional<Id> GetExceptionalResult(const CHIR::Block& predecessor, const CHIR::Block& successor,
+    const ValueNumeration& numbers)
+{
+    const auto count = predecessor.GetExpressionsNum();
+    if (count == 0) {
+        return std::nullopt;
+    }
+    const auto* expression = predecessor.GetExpressionByIdx(count - 1);
+    if (expression->GetSuccessAndErrorBlocks().second != &successor) {
+        return std::nullopt;
+    }
+    const auto* result = expression->GetResult();
+    return result ? numbers.GetId(result) : std::nullopt;
+}
+
+// Forward must-initialization, intersecting incoming edges.
+Bits ComputeInitializedAtBlock(const std::vector<CHIR::Block*>& blocks,
+    const std::vector<std::vector<size_t>>& predecessors, const std::vector<unsigned char>& reachable,
+    const std::vector<size_t>& work, size_t entry, size_t target, const ValueNumeration& numbers)
+{
+    const size_t count = numbers.GetValueCount();
+    std::vector<Bits> initializedIn(blocks.size(), Bits(count, 1)), initializedOut = initializedIn;
+    Bits parameters(count);
+    for (Id id = numbers.GetParameterOffset(); id < numbers.GetLocalOffset(); ++id) {
+        parameters[id] = 1;
+    }
+    bool changed;
+    do {
+        changed = false;
+        for (const auto block : work) {
+            Bits before(count, 1);
+            if (block == entry) {
+                before = parameters;
+            } else {
+                for (const auto pred : predecessors[block]) {
+                    if (!reachable[pred]) {
+                        continue;
+                    }
+                    for (size_t id = 0; id < count; ++id) {
+                        before[id] &= initializedOut[pred][id];
+                    }
+                    if (const auto result = GetExceptionalResult(*blocks[pred], *blocks[block], numbers)) {
+                        before[*result] = 0;
+                    }
+                }
+            }
+            Bits after = before;
+            for (size_t i = 0; i < blocks[block]->GetExpressionsNum(); ++i) {
+                if (const auto* result = blocks[block]->GetExpressionByIdx(i)->GetResult()) {
+                    if (const auto id = numbers.GetId(result)) {
+                        after[*id] = 1;
+                    }
+                }
+            }
+            if (before != initializedIn[block] || after != initializedOut[block]) {
+                initializedIn[block] = std::move(before);
+                initializedOut[block] = std::move(after);
+                changed = true;
+            }
+        }
+    } while (changed);
+    return std::move(initializedIn[target]);
 }
 } // namespace
 
@@ -106,61 +170,8 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
         }
     }
 
-    // Forward must-initialization. Start at top except at entry, and intersect
-    // incoming edges. A try-result exists only on the success edge.
-    std::vector<Bits> initializedIn(blocks.size(), Bits(count, 1)), initializedOut = initializedIn;
-    Bits parameters(count);
-    for (Id id = numbers.GetParameterOffset(); id < numbers.GetLocalOffset(); ++id) {
-        parameters[id] = 1;
-    }
-    bool changed;
-    do {
-        changed = false;
-        for (auto b : work) {
-            Bits before(count, 1);
-            if (b == *entry) {
-                before = parameters;
-            } else {
-                for (auto pred : predecessors[b]) {
-                    if (!reachable[pred]) {
-                        continue;
-                    }
-                    Bits edge = initializedOut[pred];
-                    const auto expressions = blocks[pred]->GetExpressions();
-                    if (!expressions.empty()) {
-                        const auto* last = expressions.back();
-                        const auto branches = last->GetSuccessAndErrorBlocks();
-                        if (branches.second == blocks[b]) {
-                            if (const auto* result = last->GetResult()) {
-                                if (auto id = numbers.GetId(result)) {
-                                    edge[*id] = 0;
-                                }
-                            }
-                        }
-                    }
-                    for (size_t id = 0; id < count; ++id) {
-                        before[id] &= edge[id];
-                    }
-                }
-            }
-            Bits after = before;
-            for (const auto* expr : blocks[b]->GetExpressions()) {
-                if (const auto* result = expr->GetResult()) {
-                    if (auto id = numbers.GetId(result)) {
-                        after[*id] = 1;
-                    }
-                }
-            }
-            if (before != initializedIn[b] || after != initializedOut[b]) {
-                initializedIn[b] = std::move(before);
-                initializedOut[b] = std::move(after);
-                changed = true;
-            }
-        }
-    } while (changed);
-
     const size_t b = *targetBlock;
-    Bits initialized = initializedIn[b];
+    Bits initialized = ComputeInitializedAtBlock(blocks, predecessors, reachable, work, *entry, b, numbers);
     if (!liveness.ContainsExpression(target)) {
         return SafepointLivenessResult::Failure("safepoint expression is absent from its block");
     }
