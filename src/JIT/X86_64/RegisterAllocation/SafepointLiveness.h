@@ -8,7 +8,6 @@
 #define CANGJIE_JIT_X86_64_REGISTER_ALLOCATION_SAFEPOINT_LIVENESS_H
 
 #include <string>
-#include <tuple>
 
 #include "../../Runtime/JitMetadataBuilder.h"
 #include "../Types.h"
@@ -23,8 +22,11 @@ namespace Cangjie::JIT::X86_64 {
 class Liveness;
 // GC roots, stack-interior roots, and derived locations per GC root, in the
 // ordering required by JitMetadataBuilder::RecordSafepoint.
-using SafepointRoots = std::tuple<JitMetadataBuilder::Roots, JitMetadataBuilder::Roots,
-    JitMetadataBuilder::DerivedRoots>;
+struct SafepointRoots {
+    JitMetadataBuilder::Roots gcRoots;
+    JitMetadataBuilder::Roots stackRoots;
+    JitMetadataBuilder::DerivedRoots derivedRoots;
+};
 using SafepointLivenessResult = Result<SafepointRoots, std::string>;
 
 // Analyze immediately before expression: arguments are live; its result is not

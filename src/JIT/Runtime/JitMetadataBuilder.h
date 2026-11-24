@@ -11,7 +11,6 @@
 #include <array>
 #include <cstdint>
 #include <string>
-#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -56,8 +55,18 @@ public:
     BuildResult Build(uintptr_t metadataAddress, uintptr_t codeAddress, uint32_t codeSize) const;
 
 private:
-    using Safepoint = std::tuple<uint32_t, Roots, Roots, uint32_t, DerivedRoots>;
-    using CallSite = std::tuple<uint32_t, uint32_t, size_t>;
+    struct Safepoint {
+        uint32_t pc;
+        Roots gcRoots;
+        Roots stackRoots;
+        uint32_t line;
+        DerivedRoots derivedRoots;
+    };
+    struct CallSite {
+        uint32_t start;
+        uint32_t length;
+        size_t landingPad;
+    };
     using EncodedBytes = Result<std::vector<uint8_t>, std::string>;
     using EncodedPrefix = Result<std::array<uint8_t, 4>, std::string>;
     struct RootIndices {

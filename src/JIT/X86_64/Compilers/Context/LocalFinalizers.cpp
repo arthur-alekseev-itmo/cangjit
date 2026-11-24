@@ -63,14 +63,13 @@ bool LocalFinalizers::PrepareAllocation(const CHIR::Expression& expression)
         return false;
     }
     for (const auto& site : frontier.Value()) {
-        const auto* after = std::get<0>(site);
-        CJC_ASSERT(after ? (!std::get<1>(site) && !std::get<2>(site)) :
-            (std::get<1>(site) && std::get<2>(site)));
-        if (after) {
-            finalizersAfter[after].push_back(allocation.GetResult());
+        CJC_ASSERT(site.afterExpression ? (!site.predecessor && !site.successor) :
+            (site.predecessor && site.successor));
+        if (site.afterExpression) {
+            finalizersAfter[site.afterExpression].push_back(allocation.GetResult());
             continue;
         }
-        if (!AddFinalizerEdge(std::get<1>(site), std::get<2>(site), allocation.GetResult())) {
+        if (!AddFinalizerEdge(site.predecessor, site.successor, allocation.GetResult())) {
             return false;
         }
     }

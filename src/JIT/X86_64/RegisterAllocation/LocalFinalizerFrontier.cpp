@@ -243,18 +243,18 @@ LocalFinalizerFrontier ComputeLocalFinalizerFrontier(
                 continue;
             }
             if (last != blocks[b]->GetTerminator()) {
-                sites.emplace_back(last, nullptr, nullptr);
+                sites.push_back({last, nullptr, nullptr});
             } else {
                 for (const auto successor : successors[b]) {
                     if (edgeAvailable(b, successor)) {
-                        sites.emplace_back(nullptr, blocks[b], blocks[successor]);
+                        sites.push_back({nullptr, blocks[b], blocks[successor]});
                     }
                 }
             }
         } else {
             for (const auto successor : successors[b]) {
                 if (!liveIn[successor] && edgeAvailable(b, successor)) {
-                    sites.emplace_back(nullptr, blocks[b], blocks[successor]);
+                    sites.push_back({nullptr, blocks[b], blocks[successor]});
                 }
             }
         }

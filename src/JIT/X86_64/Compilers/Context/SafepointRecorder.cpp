@@ -33,14 +33,14 @@ bool SafepointRecorder::Record(const CHIR::Expression& expression, const CHIR::V
         context.Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
         return false;
     }
-    auto& [gc, stack, derived] = result.Value();
+    auto& roots = result.Value();
     if (temporaryRoot) {
         const auto id = numeration.GetId(temporaryRoot);
         const auto* slot = id && *id < allocation.GetLocationCount()
             ? allocation.GetLocation(*id).AsStack() : nullptr;
         const auto rootOffset = slot
             ? StackFrameUtils::GetSlotOffset(slot->index, allocation.GetStackSlotCount()) : std::nullopt;
-        if (!slot || !rootOffset || gc.registers != 0) {
+        if (!slot || !rootOffset || roots.gcRoots.registers != 0) {
             context.Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
             return false;
         }
@@ -52,16 +52,18 @@ bool SafepointRecorder::Record(const CHIR::Expression& expression, const CHIR::V
                 return false;
             }
         }
-        auto position = std::lower_bound(gc.slots.begin(), gc.slots.end(), *rootOffset, std::greater<int32_t>());
-        const auto index = position - gc.slots.begin();
-        gc.slots.insert(position, *rootOffset);
-        derived.insert(derived.begin() + index, JitMetadataBuilder::Roots{});
+        auto position = std::lower_bound(
+            roots.gcRoots.slots.begin(), roots.gcRoots.slots.end(), *rootOffset, std::greater<int32_t>());
+        const auto index = position - roots.gcRoots.slots.begin();
+        roots.gcRoots.slots.insert(position, *rootOffset);
+        roots.derivedRoots.insert(roots.derivedRoots.begin() + index, JitMetadataBuilder::Roots{});
     }
     if (!context.GetGlobalContext().IsStackGrowthEnabled()) {
-        stack = {};
+        roots.stackRoots = {};
     }
-    context.GetMetadataBuilder().RecordSafepoint(static_cast<uint32_t>(offset - 4), gc.registers, std::move(gc.slots),
-        stack.registers, std::move(stack.slots), 0, std::move(derived));
+    context.GetMetadataBuilder().RecordSafepoint(static_cast<uint32_t>(offset - 4),
+        roots.gcRoots.registers, std::move(roots.gcRoots.slots),
+        roots.stackRoots.registers, std::move(roots.stackRoots.slots), 0, std::move(roots.derivedRoots));
     return true;
 }
 } // namespace Cangjie::JIT::X86_64
