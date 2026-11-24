@@ -20,6 +20,12 @@ using Word = Liveness::Word;
 using Id = ValueNumeration::Id;
 constexpr size_t BITS_PER_WORD = sizeof(Word) * 8;
 
+bool IsRuntimeExpression(const CHIR::Expression& expression)
+{
+    // JIT debug expressions emit no code and do not use their operands at runtime.
+    return expression.GetExprKind() != CHIR::ExprKind::DEBUGEXPR;
+}
+
 Word* GetRow(std::vector<Word>& matrix, size_t row, size_t wordsPerRow) noexcept
 {
     return wordsPerRow == 0 ? nullptr : matrix.data() + row * wordsPerRow;
@@ -48,6 +54,9 @@ Liveness LivenessAnalysis::Analyze(const CHIR::Function& function, const ValueNu
 
 void LivenessAnalysis::Transfer(const CHIR::Expression& expression, const ValueNumeration& numeration, Word* live)
 {
+    if (!IsRuntimeExpression(expression)) {
+        return;
+    }
     if (const auto id = numeration.GetId(expression.GetResult())) {
         Remove(live, *id);
     }
@@ -96,6 +105,9 @@ void LivenessAnalysis::Compute(const ValueNumeration& numeration)
         auto* blockUses = GetRow(uses, i, wordsPerBlock);
         auto* blockDefinitions = GetRow(definitions, i, wordsPerBlock);
         for (const auto* expression : blocks[i]->GetExpressions()) {
+            if (!IsRuntimeExpression(*expression)) {
+                continue;
+            }
             for (size_t operand = 0; operand < expression->GetNumOfNonSuccessorOperands(); ++operand) {
                 const auto id = numeration.GetId(expression->GetOperand(operand));
                 if (id && !Liveness::Contains(blockDefinitions, *id)) {

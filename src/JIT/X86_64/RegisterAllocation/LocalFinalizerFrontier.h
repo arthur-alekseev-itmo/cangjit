@@ -21,12 +21,16 @@ class Function;
 }
 
 namespace Cangjie::JIT::X86_64 {
+class Liveness;
+class ValueNumeration;
+
 // An after-expression site has a non-null first element. An edge site has a
 // null first element and non-null predecessor and successor. Edge sites include
 // exceptional edges and must be emitted only on that particular edge.
 using LocalFinalizerSite = std::tuple<const CHIR::Expression*, const CHIR::Block*, const CHIR::Block*>;
 using LocalFinalizerFrontier = Result<std::vector<LocalFinalizerSite>, std::string>;
 LocalFinalizerFrontier ComputeLocalFinalizerFrontier(
-    const CHIR::Function& function, const CHIR::AllocateBase& allocation);
+    const CHIR::Function& function, const CHIR::AllocateBase& allocation, const Liveness& liveness,
+    const ValueNumeration& numeration);
 }
 #endif

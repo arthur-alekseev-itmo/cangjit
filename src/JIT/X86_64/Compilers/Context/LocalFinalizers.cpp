@@ -56,7 +56,8 @@ bool LocalFinalizers::PrepareAllocation(const CHIR::Expression& expression)
     if (!def || !def->GetFinalizer()) {
         return true;
     }
-    auto frontier = ComputeLocalFinalizerFrontier(*context.GetFunction(), allocation);
+    auto frontier = ComputeLocalFinalizerFrontier(
+        *context.GetFunction(), allocation, context.GetLiveness(), context.GetValueNumeration());
     if (!frontier || !allocation.GetResult()) {
         context.Fail(JitFailureKind::UnsupportedLocalFinalizer, expression.GetExprKind());
         return false;

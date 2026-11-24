@@ -7,20 +7,17 @@
 #include "LocalFinalizerFrontier.h"
 
 #include <algorithm>
-#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
+#include "Liveness.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Expression/Terminator.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
-#include "cangjie/Utils/CheckUtils.h"
 
 namespace Cangjie::JIT::X86_64 {
 namespace {
-using Bits = std::vector<unsigned char>;
-
 bool IsDebug(const CHIR::Expression& expression)
 {
     return expression.GetExprKind() == CHIR::ExprKind::DEBUGEXPR;
@@ -85,7 +82,8 @@ bool CollectSlotAddresses(const CHIR::Value* slot, std::vector<const CHIR::Value
 }
 
 LocalFinalizerFrontier ComputeLocalFinalizerFrontier(
-    const CHIR::Function& function, const CHIR::AllocateBase& allocation)
+    const CHIR::Function& function, const CHIR::AllocateBase& allocation, const Liveness& liveness,
+    const ValueNumeration& numeration)
 {
     const auto* body = function.GetBody();
     const auto* object = allocation.GetResult();
@@ -95,16 +93,12 @@ LocalFinalizerFrontier ComputeLocalFinalizerFrontier(
 
     // Mirror native CodeGen's representative closure, including trackable
     // stack-slot round trips. Escapes remain registered until the region ends.
-    std::vector<const CHIR::Value*> representatives{object};
     std::vector<const CHIR::Value*> pending{object};
-    std::unordered_map<const CHIR::Value*, size_t> repIndex{{object, 0}};
+    std::unordered_set<const CHIR::Value*> representatives{object};
     std::unordered_set<const CHIR::Value*> visitedSlots;
     const auto addRepresentative = [&](const CHIR::Value* value, bool follow) {
-        if (value && repIndex.emplace(value, representatives.size()).second) {
-            representatives.push_back(value);
-            if (follow) {
-                pending.push_back(value);
-            }
+        if (value && representatives.insert(value).second && follow) {
+            pending.push_back(value);
         }
     };
     for (size_t i = 0; i < pending.size(); ++i) {
@@ -145,32 +139,26 @@ LocalFinalizerFrontier ComputeLocalFinalizerFrontier(
         }
     }
 
-    auto blocks = body->GetAllBlocks();
-    blocks.erase(std::remove_if(blocks.begin(), blocks.end(),
-        [&](const CHIR::Block* block) { return block->GetFuncOrLambdaBody() != body; }), blocks.end());
-    std::unordered_map<const CHIR::Block*, size_t> indices;
-    for (size_t i = 0; i < blocks.size(); ++i) {
-        indices.emplace(blocks[i], i);
-    }
-    const auto entry = indices.find(body->GetEntryBlock());
-    const auto allocationBlock = indices.find(allocation.GetParentBlock());
-    if (entry == indices.end() || allocationBlock == indices.end()) {
+    const auto& blocks = liveness.GetBlocks();
+    const auto entry = liveness.GetBlockIndex(body->GetEntryBlock());
+    const auto allocationBlock = liveness.GetBlockIndex(allocation.GetParentBlock());
+    if (!entry || !allocationBlock) {
         return LocalFinalizerFrontier::Failure("local finalizer has no function entry or allocation block");
     }
     std::vector<std::vector<size_t>> successors(blocks.size()), predecessors(blocks.size());
     for (size_t i = 0; i < blocks.size(); ++i) {
         for (const auto* successor : blocks[i]->GetSuccessors()) {
-            const auto found = indices.find(successor);
-            if (found == indices.end()) {
+            const auto index = liveness.GetBlockIndex(successor);
+            if (!index) {
                 return LocalFinalizerFrontier::Failure("local finalizer successor is outside its function");
             }
-            successors[i].push_back(found->second);
-            predecessors[found->second].push_back(i);
+            successors[i].push_back(*index);
+            predecessors[*index].push_back(i);
         }
     }
     std::vector<unsigned char> reachable(blocks.size());
-    std::vector<size_t> work{entry->second};
-    reachable[entry->second] = 1;
+    std::vector<size_t> work{*entry};
+    reachable[*entry] = 1;
     for (size_t i = 0; i < work.size(); ++i) {
         for (const auto next : successors[work[i]]) {
             if (!reachable[next]) {
@@ -179,16 +167,16 @@ LocalFinalizerFrontier ComputeLocalFinalizerFrontier(
             }
         }
     }
-    if (!reachable[allocationBlock->second]) {
+    if (!reachable[*allocationBlock]) {
         return LocalFinalizerFrontier::Success({});
     }
 
     // A dominated block can still be reached through a failed TryAllocate.
     // Track whether registration succeeded on every incoming path.
     std::vector<unsigned char> registered(blocks.size(), 1);
-    registered[entry->second] = 0;
+    registered[*entry] = 0;
     const auto edgeAvailable = [&](size_t pred, size_t succ) {
-        if (pred != allocationBlock->second) {
+        if (pred != *allocationBlock) {
             return registered[pred] != 0;
         }
         return allocation.GetExprKind() != CHIR::ExprKind::TRY_ALLOCATE ||
@@ -198,7 +186,7 @@ LocalFinalizerFrontier ComputeLocalFinalizerFrontier(
     do {
         changed = false;
         for (const auto b : work) {
-            if (b == entry->second) {
+            if (b == *entry) {
                 continue;
             }
             bool available = true;
@@ -215,48 +203,25 @@ LocalFinalizerFrontier ComputeLocalFinalizerFrontier(
         }
     } while (changed);
 
-    std::vector<Bits> liveIn(blocks.size(), Bits(representatives.size())), liveOut = liveIn;
-    do {
-        changed = false;
-        for (auto it = work.rbegin(); it != work.rend(); ++it) {
-            const auto b = *it;
-            Bits out(representatives.size());
-            for (const auto successor : successors[b]) {
-                for (size_t i = 0; i < out.size(); ++i) {
-                    out[i] |= liveIn[successor][i];
-                }
-            }
-            Bits in = out;
-            const auto expressions = blocks[b]->GetExpressions();
-            for (auto expr = expressions.rbegin(); expr != expressions.rend(); ++expr) {
-                if (IsDebug(**expr)) {
-                    continue;
-                }
-                if (const auto found = repIndex.find((*expr)->GetResult()); found != repIndex.end()) {
-                    CJC_ASSERT(found->second < in.size());
-                    in[found->second] = 0;
-                }
-                for (size_t i = 0; i < (*expr)->GetNumOfNonSuccessorOperands(); ++i) {
-                    if (const auto found = repIndex.find((*expr)->GetOperand(i)); found != repIndex.end()) {
-                        CJC_ASSERT(found->second < in.size());
-                        in[found->second] = 1;
-                    }
-                }
-            }
-            if (out != liveOut[b] || in != liveIn[b]) {
-                liveOut[b] = std::move(out);
-                liveIn[b] = std::move(in);
-                changed = true;
-            }
+    std::vector<ValueNumeration::Id> representativeIds;
+    representativeIds.reserve(representatives.size());
+    for (const auto* value : representatives) {
+        const auto id = numeration.GetId(value);
+        if (!id) {
+            return LocalFinalizerFrontier::Failure("unnumbered local finalizer representative");
         }
-    } while (changed);
-
-    const auto anyLive = [](const Bits& bits) {
-        return std::any_of(bits.begin(), bits.end(), [](unsigned char value) { return value != 0; });
-    };
+        representativeIds.push_back(*id);
+    }
+    std::vector<unsigned char> liveIn(blocks.size());
+    for (const auto b : work) {
+        const auto* bitmap = liveness.GetLiveIn(blocks[b]);
+        liveIn[b] = std::any_of(representativeIds.begin(), representativeIds.end(),
+            [bitmap](ValueNumeration::Id id) { return Liveness::Contains(bitmap, id); });
+    }
     std::vector<LocalFinalizerSite> sites;
     for (const auto b : work) {
-        if (!anyLive(liveOut[b])) {
+        const auto& next = successors[b];
+        if (std::none_of(next.begin(), next.end(), [&](size_t successor) { return liveIn[successor]; })) {
             const CHIR::Expression* last = nullptr;
             bool allocationSeen = blocks[b] != allocation.GetParentBlock();
             for (const auto* expression : blocks[b]->GetExpressions()) {
@@ -266,15 +231,15 @@ LocalFinalizerFrontier ComputeLocalFinalizerFrontier(
                 if (IsDebug(*expression)) {
                     continue;
                 }
-                bool activity = repIndex.count(expression->GetResult()) != 0;
+                bool activity = representatives.count(expression->GetResult()) != 0;
                 for (size_t i = 0; !activity && i < expression->GetNumOfNonSuccessorOperands(); ++i) {
-                    activity = repIndex.count(expression->GetOperand(i)) != 0;
+                    activity = representatives.count(expression->GetOperand(i)) != 0;
                 }
                 if (activity && allocationSeen) {
                     last = expression;
                 }
             }
-            if (!last || (b != allocationBlock->second && !registered[b])) {
+            if (!last || (b != *allocationBlock && !registered[b])) {
                 continue;
             }
             if (last != blocks[b]->GetTerminator()) {
@@ -288,7 +253,7 @@ LocalFinalizerFrontier ComputeLocalFinalizerFrontier(
             }
         } else {
             for (const auto successor : successors[b]) {
-                if (!anyLive(liveIn[successor]) && edgeAvailable(b, successor)) {
+                if (!liveIn[successor] && edgeAvailable(b, successor)) {
                     sites.emplace_back(nullptr, blocks[b], blocks[successor]);
                 }
             }
