@@ -66,24 +66,25 @@ CompilationResult FunctionRecord::CompleteCompilation(CompilationResult result)
     if (state != FunctionState::COMPILING) {
         return CompilationResult::Failure({"function is not being materialized"});
     }
-    if (result) {
-        const auto address = result.Value();
-        if (address != 0 && address != entryStub) {
-            compiledTarget = address;
-            state = FunctionState::READY;
-            return result;
-        }
-        result = CompilationResult::Failure({"function materializer returned an invalid target"});
+
+    if (!result) {
+        error.swap(result.Error().message);
+        state = FunctionState::FAILED;
+        return CompilationResult::Failure({error});
     }
-    error.swap(result.Error().message);
-    state = FunctionState::FAILED;
-    return CompilationResult::Failure({error});
+
+    const auto address = result.Value();
+    if (address != 0 && address != entryStub) {
+        compiledTarget = address;
+        state = FunctionState::READY;
+        return result;
+    }
+    result = CompilationResult::Failure({"function materializer returned an invalid target"});
+    return result;
 }
 
 void FunctionRecord::FailCompilation() noexcept
 {
-    if (state == FunctionState::COMPILING) {
-        state = FunctionState::FAILED;
-    }
+    state = FunctionState::FAILED;
 }
 } // namespace Cangjie::JIT::X86_64

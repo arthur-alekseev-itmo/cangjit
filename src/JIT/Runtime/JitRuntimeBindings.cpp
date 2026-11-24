@@ -350,8 +350,8 @@ const char* GetRuntimeErrorMessage(RuntimeErrorKind kind) noexcept
         case RuntimeErrorKind::UnloadSymbolMissing: return "library unload symbol is missing";
         case RuntimeErrorKind::LibraryUnloadFailed: return "library unload failed";
         case RuntimeErrorKind::RuntimeCloseFailed: return "runtime library close failed";
+        default: return "unknown runtime error";
     }
-    return "unknown runtime error";
 }
 
 std::string FormatRuntimeError(const RuntimeError& error)
