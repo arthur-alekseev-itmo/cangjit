@@ -167,7 +167,7 @@ static bool ExecuteCompile(DefaultCompilerInstance& instance)
         }
         JIT::X86_64::X86_64Compiler jit(globalOptions.importPaths, globalOptions.librarySearchPaths);
         for (const auto* package : packages) {
-            jit.Compile(*package, std::cout);
+            jit.Run(*package, std::cout);
         }
         return static_cast<bool>(std::cout);
 #else

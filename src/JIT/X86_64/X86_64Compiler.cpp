@@ -47,7 +47,7 @@ Result<void, RuntimeError> X86_64Compiler::Close() const
     return globalContext ? globalContext->Close() : Result<void, RuntimeError>::Success();
 }
 
-void X86_64Compiler::Compile(const CHIR::Package& package, std::ostream& output) const
+void X86_64Compiler::Run(const CHIR::Package& package, std::ostream& output) const
 {
     if (closed) {
         ReportError(output, "JIT: compiler is closed");
@@ -56,6 +56,7 @@ void X86_64Compiler::Compile(const CHIR::Package& package, std::ostream& output)
     const auto* function = FindUserMain(package);
     if (!function || !ValidateUserMain(*function, output) ||
         !ValidatePackageInitializers(package, output) || !ConfigureRuntime(output)) {
+        ReportError(output, "JIT: entrypoint main is not found or is incorrect");
         return;
     }
     const auto address = CompileUserMain(*function, output);

@@ -33,10 +33,9 @@ public:
     X86_64Compiler();
     X86_64Compiler(std::vector<std::string> importPaths, std::vector<std::string> librarySearchPaths);
     ~X86_64Compiler();
-    static Result<std::unique_ptr<X86_64Compiler>, RuntimeError> Create(const RuntimeConfig& config);
 
-    void Compile(const CHIR::Package& package, std::ostream& output) const;
-    // The host must quiesce generated code and tasks before closing.
+    static Result<std::unique_ptr<X86_64Compiler>, RuntimeError> Create(const RuntimeConfig& config);
+    void Run(const CHIR::Package& package, std::ostream& output) const;
     Result<void, RuntimeError> Close() const;
 
 private:
