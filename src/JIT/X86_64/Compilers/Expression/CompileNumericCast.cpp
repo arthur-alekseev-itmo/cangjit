@@ -9,7 +9,7 @@
 #include "CompileBinaryExpression.h"
 
 #include "../../Utils/MemoryUtils.h"
-#include "../../Utils/IntegerUtil.h"
+#include "../../Utils/TypeUtils.h"
 #include "../../Utils/RegisterUtils.h"
 #include "../Context/FunctionContext.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
@@ -32,15 +32,15 @@ void CompileNumericCast::Compile(FunctionContext& context, const CHIR::NumericCa
     }
     const auto sourceKind = sourceType->GetTypeKind();
     const auto targetKind = targetType->GetTypeKind();
-    const bool sourceFloat = sourceKind == CHIR::Type::TYPE_FLOAT32 || sourceKind == CHIR::Type::TYPE_FLOAT64;
-    const bool targetFloat = targetKind == CHIR::Type::TYPE_FLOAT32 || targetKind == CHIR::Type::TYPE_FLOAT64;
+    const bool sourceFloat = TypeUtils::IsFloating(*sourceType);
+    const bool targetFloat = TypeUtils::IsFloating(*targetType);
     if (sourceFloat && targetFloat) {
         CompileFloatCast(context, source, result, sourceKind != targetKind,
             targetKind == CHIR::Type::TYPE_FLOAT64, normal);
         return;
     }
-    const auto sourceWidth = IntegerUtil::IntegerWidth(*sourceType);
-    const auto targetWidth = IntegerUtil::IntegerWidth(*targetType);
+    const auto sourceWidth = TypeUtils::IntegerWidth(*sourceType);
+    const auto targetWidth = TypeUtils::IntegerWidth(*targetType);
     if (!sourceWidth || !targetWidth) {
         context.Fail(JitFailureKind::UnsupportedNumericCast);
         return;
@@ -59,7 +59,7 @@ void CompileNumericCast::Compile(FunctionContext& context, const CHIR::NumericCa
         return;
     }
     auto& assembler = context.GetAssembler();
-    IntegerUtil::NormalizeInteger(assembler, asmjit::x86::rax, sourceWidth, sourceSigned);
+    TypeUtils::NormalizeInteger(assembler, asmjit::x86::rax, sourceWidth, sourceSigned);
     if (!alwaysFits && (overflow == OverflowStrategy::SATURATING || overflow == OverflowStrategy::THROWING)) {
         const uint64_t targetSignBit = uint64_t{1} << (targetWidth - 1);
         const uint64_t lower = targetSigned ? ~(targetSignBit - 1) : 0;
@@ -100,7 +100,7 @@ void CompileNumericCast::Compile(FunctionContext& context, const CHIR::NumericCa
         }
         assembler.bind(done);
     }
-    IntegerUtil::NormalizeInteger(assembler, asmjit::x86::rax, targetWidth, targetSigned);
+    TypeUtils::NormalizeInteger(assembler, asmjit::x86::rax, targetWidth, targetSigned);
     MemoryUtils::StoreValue(context, result, asmjit::x86::rax);
     if (normal && !context.GetFailure()) {
         assembler.jmp(context.GetLocalFinalizers().GetEdgeLabel(normal));

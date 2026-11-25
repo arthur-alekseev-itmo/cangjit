@@ -4,12 +4,12 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#include "IntegerUtil.h"
+#include "TypeUtils.h"
 
 #include "cangjie/CHIR/IR/Type/Type.h"
 
 namespace Cangjie::JIT::X86_64 {
-unsigned IntegerUtil::IntegerWidth(const CHIR::Type& type) noexcept
+unsigned TypeUtils::IntegerWidth(const CHIR::Type& type) noexcept
 {
     using T = CHIR::Type;
     switch (type.GetTypeKind()) {
@@ -22,7 +22,31 @@ unsigned IntegerUtil::IntegerWidth(const CHIR::Type& type) noexcept
     }
 }
 
-void IntegerUtil::NormalizeInteger(asmjit::x86::Assembler& assembler, const asmjit::x86::Gp& reg,
+unsigned TypeUtils::TypeWidth(const CHIR::Type& type) noexcept
+{
+    using T = CHIR::Type;
+    if (type.IsBoolean()) {
+        return 8;
+    }
+    if (type.IsRef() || type.IsCPointer() || type.IsCString()) {
+        return 64;
+    }
+    if (type.GetTypeKind() == T::TYPE_FLOAT32) {
+        return 32;
+    }
+    if (type.GetTypeKind() == T::TYPE_FLOAT64) {
+        return 64;
+    }
+    return IntegerWidth(type);
+}
+
+bool TypeUtils::IsFloating(const CHIR::Type& type) noexcept
+{
+    using T = CHIR::Type;
+    return type.GetTypeKind() == T::TYPE_FLOAT32 || type.GetTypeKind() == T::TYPE_FLOAT64;
+}
+
+void TypeUtils::NormalizeInteger(asmjit::x86::Assembler& assembler, const asmjit::x86::Gp& reg,
     unsigned width, bool isSigned)
 {
     if (width != 64) {

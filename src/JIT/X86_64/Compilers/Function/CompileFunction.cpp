@@ -15,7 +15,7 @@
 #include "../../RegisterAllocation/ValueNumeration.h"
 #include "../../Utils/SystemVCallingConvention.h"
 #include "../../Utils/MemoryUtils.h"
-#include "../../Utils/IntegerUtil.h"
+#include "../../Utils/TypeUtils.h"
 #include "../../Utils/RegisterUtils.h"
 #include "../../Utils/StackFrameUtils.h"
 #include "CompileBlock.h"
@@ -179,10 +179,8 @@ bool CompileFunction::SaveReturnValue(FunctionContext& context) const
     if (type->IsUnit() || type->IsVoid() || type->IsNothing()) {
         return true;
     }
-    const auto kind = type->GetTypeKind();
-    const auto width = type->IsBoolean() ? 8U : IntegerUtil::IntegerWidth(*type);
-    const bool pointer = type->IsRef() || type->IsCPointer() || type->IsCString();
-    if (!width && !pointer && kind != CHIR::Type::TYPE_FLOAT32 && kind != CHIR::Type::TYPE_FLOAT64) {
+    const auto width = TypeUtils::TypeWidth(*type);
+    if (!width) {
         context.Fail(JitFailureKind::UnsupportedReturnType);
         return false;
     }
@@ -204,13 +202,13 @@ void CompileFunction::LoadReturnValueFromAddress(
         assembler.movsd(asmjit::x86::xmm0, asmjit::x86::qword_ptr(asmjit::x86::rax));
     } else if (width == 8) {
         assembler.movzx(asmjit::x86::eax, asmjit::x86::byte_ptr(asmjit::x86::rax));
-        IntegerUtil::NormalizeInteger(assembler, asmjit::x86::rax, width, type.IsSignedInteger());
+        TypeUtils::NormalizeInteger(assembler, asmjit::x86::rax, width, type.IsSignedInteger());
     } else if (width == 16) {
         assembler.movzx(asmjit::x86::eax, asmjit::x86::word_ptr(asmjit::x86::rax));
-        IntegerUtil::NormalizeInteger(assembler, asmjit::x86::rax, width, type.IsSignedInteger());
+        TypeUtils::NormalizeInteger(assembler, asmjit::x86::rax, width, type.IsSignedInteger());
     } else if (width == 32) {
         assembler.mov(asmjit::x86::eax, asmjit::x86::dword_ptr(asmjit::x86::rax));
-        IntegerUtil::NormalizeInteger(assembler, asmjit::x86::rax, width, type.IsSignedInteger());
+        TypeUtils::NormalizeInteger(assembler, asmjit::x86::rax, width, type.IsSignedInteger());
     } else {
         assembler.mov(asmjit::x86::rax, asmjit::x86::qword_ptr(asmjit::x86::rax));
     }
@@ -259,25 +257,16 @@ bool CompileFunction::SaveParameters(FunctionContext& context, const ParameterPl
 bool CompileFunction::SaveParameter(FunctionContext& context, const ParameterPlacement& placements,
     const CHIR::Parameter* parameter) const
 {
-    if (!parameter || !parameter->GetType()) {
-        context.Fail(JitFailureKind::UnsupportedParameters);
-        return false;
-    }
     const auto* type = parameter->GetType();
-    const bool pointer = type->IsRef() || type->IsCPointer() || type->IsCString();
-    const auto width = pointer ? 64U : type->IsBoolean() ? 8U : IntegerUtil::IntegerWidth(*type);
-    const bool floating = type->GetTypeKind() == CHIR::Type::TYPE_FLOAT32 ||
-        type->GetTypeKind() == CHIR::Type::TYPE_FLOAT64;
-    const auto location = placements.locations.find(parameter);
-    CJC_ASSERT(location != placements.locations.end());
+    const auto width = TypeUtils::TypeWidth(*type);
+    const bool floating = TypeUtils::IsFloating(*type);
+    const auto location = placements.locations.at(parameter);
     const auto id = context.GetValueNumeration().GetId(parameter);
-    if ((!width && !floating) || location == placements.locations.end() || !id ||
-        *id >= context.GetRegisterAllocation().GetLocationCount() ||
-        !context.GetRegisterAllocation().GetLocation(*id).IsStack()) {
+    if ((!width && !floating) || !context.GetRegisterAllocation().GetLocation(*id).IsStack()) {
         context.Fail(JitFailureKind::UnsupportedParameters);
         return false;
     }
-    if (const auto* simd = location->second.AsSimdRegister()) {
+    if (const auto* simd = location.AsSimdRegister()) {
         const auto source = RegisterUtils::GetArgumentSimdRegister(simd->index);
         if (!floating || !source || !MemoryUtils::StoreFloatValue(context, parameter, *source, asmjit::x86::rax)) {
             context.Fail(JitFailureKind::UnsupportedParameters);
@@ -286,14 +275,14 @@ bool CompileFunction::SaveParameter(FunctionContext& context, const ParameterPla
         return true;
     }
     auto& assembler = context.GetAssembler();
-    if (const auto* reg = location->second.AsRegister()) {
+    if (const auto* reg = location.AsRegister()) {
         const auto source = RegisterUtils::Get64BitRegister(reg->type);
         if (!source) {
             context.Fail(JitFailureKind::UnsupportedParameters);
             return false;
         }
         assembler.mov(asmjit::x86::rax, *source);
-    } else if (const auto* stack = location->second.AsIncomingStack()) {
+    } else if (const auto* stack = location.AsIncomingStack()) {
         const auto offset = StackFrameUtils::GetIncomingArgumentOffset(stack->index);
         if (!offset) {
             context.Fail(JitFailureKind::UnsupportedParameters);
@@ -304,8 +293,8 @@ bool CompileFunction::SaveParameter(FunctionContext& context, const ParameterPla
         context.Fail(JitFailureKind::UnsupportedParameters);
         return false;
     }
-    if (width) {
-        IntegerUtil::NormalizeInteger(assembler, asmjit::x86::rax, width, type->IsSignedInteger());
+    if (!floating && width) {
+        TypeUtils::NormalizeInteger(assembler, asmjit::x86::rax, width, type->IsSignedInteger());
     }
     return MemoryUtils::StoreValue(context, parameter, asmjit::x86::rax);
 }

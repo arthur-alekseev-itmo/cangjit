@@ -17,6 +17,7 @@
 #include "../Context/GlobalContext.h"
 #include "../../../Runtime/JitMetadataBuilder.h"
 #include "../../Utils/StackFrameUtils.h"
+#include "../../Utils/TypeUtils.h"
 #include "../../Utils/SystemVCallingConvention.h"
 #include "CompileFunction.h"
 #include "cangjie/CHIR/IR/Annotation.h"
@@ -86,9 +87,7 @@ bool SupportedSignature(const CHIR::Function& function, std::vector<int32_t>& gc
         return false;
     }
     const auto supported = [](const CHIR::Type& type) {
-        const auto kind = type.GetTypeKind();
-        return type.IsInteger() || type.IsBoolean() || kind == CHIR::Type::TYPE_FLOAT32 ||
-            kind == CHIR::Type::TYPE_FLOAT64 ||
+        return type.IsInteger() || type.IsBoolean() || TypeUtils::IsFloating(type) ||
             IsObjectReference(type);
     };
     const auto* result = placement->abiReturnType;

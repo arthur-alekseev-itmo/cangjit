@@ -11,7 +11,7 @@
 #include "../Function/CompileFunctionStub.h"
 #include "../../Utils/SystemVCallingConvention.h"
 #include "../../Utils/MemoryUtils.h"
-#include "../../Utils/IntegerUtil.h"
+#include "../../Utils/TypeUtils.h"
 #include "../../Utils/RegisterUtils.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Expression/Terminator.h"
@@ -27,10 +27,6 @@ namespace Cangjie::JIT::X86_64 {
 namespace {
 namespace x86 = asmjit::x86;
 
-bool IsScalarFloat(const CHIR::Type& type)
-{
-    return type.GetTypeKind() == CHIR::Type::TYPE_FLOAT32 || type.GetTypeKind() == CHIR::Type::TYPE_FLOAT64;
-}
 
 const CHIR::Function* ValidateCall(FunctionContext& context, const CHIR::ApplyBase& expression)
 {
@@ -53,8 +49,8 @@ const CHIR::Function* ValidateCall(FunctionContext& context, const CHIR::ApplyBa
         ? static_cast<const CHIR::RefType*>(returnType)->GetBaseType() : nullptr;
     const bool objectReturn = returnBase &&
         (returnBase->IsClass() || returnBase->IsRawArray() || returnBase->IsBox());
-    if (!noResult && !IntegerUtil::IntegerWidth(*returnType) && !returnType->IsBoolean() &&
-        !objectReturn && !returnType->IsCPointer() && !returnType->IsCString() && !IsScalarFloat(*returnType)) {
+    if (!noResult && !TypeUtils::IntegerWidth(*returnType) && !returnType->IsBoolean() &&
+        !objectReturn && !returnType->IsCPointer() && !returnType->IsCString() && !TypeUtils::IsFloating(*returnType)) {
         context.Fail(JitFailureKind::UnsupportedReturnType);
         return nullptr;
     }
@@ -71,8 +67,8 @@ bool ValidateArguments(FunctionContext& context, const CHIR::ApplyBase& expressi
     for (size_t i = 0; i < parameters.size(); ++i) {
         const auto* parameter = parameters[i];
         const auto* argument = expression.GetOperand(i + 1);
-        if ((!IntegerUtil::IntegerWidth(*parameter->GetType()) && !parameter->GetType()->IsBoolean() &&
-            !parameter->GetType()->IsRef() && !IsScalarFloat(*parameter->GetType())) ||
+        if ((!TypeUtils::IntegerWidth(*parameter->GetType()) && !parameter->GetType()->IsBoolean() &&
+            !parameter->GetType()->IsRef() && !TypeUtils::IsFloating(*parameter->GetType())) ||
             !argument || !argument->GetType() ||
             argument->GetType()->GetTypeKind() != parameter->GetType()->GetTypeKind()) {
             context.Fail(JitFailureKind::UnsupportedCall);
@@ -235,14 +231,14 @@ void EmitCall(FunctionContext& context, const CHIR::ApplyBase& expression, const
     MemoryUtils::ReleaseStack(context, stackSize);
     const auto* returnType = callee.GetReturnType();
     if (!returnType->IsUnit() && !returnType->IsNothing() && !returnType->IsVoid()) {
-        if (IsScalarFloat(*returnType)) {
+        if (TypeUtils::IsFloating(*returnType)) {
             if (!MemoryUtils::StoreFloatValue(context, expression.GetResult(), x86::xmm0, x86::rax)) {
                 return;
             }
         } else {
-            const auto width = returnType->IsBoolean() ? 8U : IntegerUtil::IntegerWidth(*returnType);
+            const auto width = TypeUtils::TypeWidth(*returnType);
             if (width) {
-                IntegerUtil::NormalizeInteger(assembler, x86::rax, width, returnType->IsSignedInteger());
+                TypeUtils::NormalizeInteger(assembler, x86::rax, width, returnType->IsSignedInteger());
             }
             MemoryUtils::StoreValue(context, expression.GetResult(), x86::rax);
         }

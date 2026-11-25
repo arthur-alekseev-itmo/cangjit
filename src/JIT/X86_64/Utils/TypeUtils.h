@@ -4,8 +4,8 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#ifndef CANGJIE_JIT_X86_64_UTILS_INTEGER_UTIL_H
-#define CANGJIE_JIT_X86_64_UTILS_INTEGER_UTIL_H
+#ifndef CANGJIE_JIT_X86_64_UTILS_TYPE_UTILS_H
+#define CANGJIE_JIT_X86_64_UTILS_TYPE_UTILS_H
 
 #include <asmjit/x86.h>
 
@@ -14,12 +14,14 @@ class Type;
 }
 
 namespace Cangjie::JIT::X86_64 {
-class IntegerUtil final {
+class TypeUtils final {
 public:
     static unsigned IntegerWidth(const CHIR::Type& type) noexcept;
+    static unsigned TypeWidth(const CHIR::Type& type) noexcept;
+    static bool IsFloating(const CHIR::Type& type) noexcept;
     static void NormalizeInteger(asmjit::x86::Assembler& assembler, const asmjit::x86::Gp& reg,
         unsigned width, bool isSigned);
 };
 } // namespace Cangjie::JIT::X86_64
 
-#endif // CANGJIE_JIT_X86_64_UTILS_INTEGER_UTIL_H
+#endif // CANGJIE_JIT_X86_64_UTILS_TYPE_UTILS_H

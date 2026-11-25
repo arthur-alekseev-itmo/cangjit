@@ -13,7 +13,7 @@
 #include "../Context/FunctionContext.h"
 #include "../Context/GlobalContext.h"
 #include "../../Utils/MemoryUtils.h"
-#include "../../Utils/IntegerUtil.h"
+#include "../../Utils/TypeUtils.h"
 #include "../../Utils/RegisterUtils.h"
 #include "../../Utils/SystemVCallingConvention.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
@@ -248,15 +248,14 @@ void CompileCall(FunctionContext& context, const CHIR::DynamicDispatch& expressi
     }
     MemoryUtils::ReleaseStack(context, placement->stackSize + typeScratchSize + SCRATCH_SIZE);
     if (!returnType->IsUnit() && !returnType->IsNothing() && !returnType->IsVoid()) {
-        if (returnType->GetTypeKind() == CHIR::Type::TYPE_FLOAT32 ||
-            returnType->GetTypeKind() == CHIR::Type::TYPE_FLOAT64) {
+        if (TypeUtils::IsFloating(*returnType)) {
             if (!MemoryUtils::StoreFloatValue(context, result, x86::xmm0, x86::rax)) {
                 return;
             }
         } else {
-            const auto width = returnType->IsBoolean() ? 8U : IntegerUtil::IntegerWidth(*returnType);
+            const auto width = TypeUtils::TypeWidth(*returnType);
             if (width) {
-                IntegerUtil::NormalizeInteger(a, x86::rax, width, returnType->IsSignedInteger());
+                TypeUtils::NormalizeInteger(a, x86::rax, width, returnType->IsSignedInteger());
             } else if (!returnType->IsRef() && !returnType->IsCPointer() && !returnType->IsCString()) {
                 context.Fail(JitFailureKind::UnsupportedReturnType, expression.GetExprKind());
                 return;

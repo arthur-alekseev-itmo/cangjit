@@ -5,7 +5,7 @@
 #include "CompileBinaryExpression.h"
 
 #include "../../Utils/MemoryUtils.h"
-#include "../../Utils/IntegerUtil.h"
+#include "../../Utils/TypeUtils.h"
 #include "../../Utils/RegisterUtils.h"
 #include "../Context/GlobalContext.h"
 #include "../Context/FunctionContext.h"
@@ -50,7 +50,7 @@ void CheckedArithmetic(Cangjie::JIT::X86_64::FunctionContext& ctx,
             }
         } else {
             a.mov(rdx, rax);
-            Cangjie::JIT::X86_64::IntegerUtil::NormalizeInteger(a, rdx, width, isSigned);
+            Cangjie::JIT::X86_64::TypeUtils::NormalizeInteger(a, rdx, width, isSigned);
             a.cmp(rax, rdx);
             a.jne(overflow);
         }
@@ -205,8 +205,8 @@ void CompileBinaryExpression::Compile(FunctionContext& ctx, const CHIR::BinaryEx
     }
     const auto* type = lhs->GetType();
     const auto kind = expr.GetOpKind();
-    const auto width = IntegerUtil::IntegerWidth(*type);
-    const auto rhsWidth = IntegerUtil::IntegerWidth(*rhs->GetType());
+    const auto width = TypeUtils::IntegerWidth(*type);
+    const auto rhsWidth = TypeUtils::IntegerWidth(*rhs->GetType());
     const bool shift = kind == K::LSHIFT || kind == K::RSHIFT;
     const bool boolean = type->IsBoolean();
     const bool comparison = kind >= K::LT && kind <= K::NOTEQUAL;
@@ -220,8 +220,7 @@ void CompileBinaryExpression::Compile(FunctionContext& ctx, const CHIR::BinaryEx
         ctx.Fail(JitFailureKind::IncompatibleBinaryTypes);
         return;
     }
-    if (type->GetTypeKind() == CHIR::Type::TYPE_FLOAT32 ||
-        type->GetTypeKind() == CHIR::Type::TYPE_FLOAT64) {
+    if (TypeUtils::IsFloating(*type)) {
         CompileFloatBinary(ctx, expr, normal);
         return;
     }
@@ -245,8 +244,8 @@ void CompileBinaryExpression::Compile(FunctionContext& ctx, const CHIR::BinaryEx
     }
     auto& a = ctx.GetAssembler();
     if (width) {
-        IntegerUtil::NormalizeInteger(a, asmjit::x86::rax, width, type->IsSignedInteger());
-        IntegerUtil::NormalizeInteger(a, asmjit::x86::rcx, shift ? rhsWidth : width,
+        TypeUtils::NormalizeInteger(a, asmjit::x86::rax, width, type->IsSignedInteger());
+        TypeUtils::NormalizeInteger(a, asmjit::x86::rcx, shift ? rhsWidth : width,
             shift || type->IsSignedInteger());
     }
     switch (kind) {
@@ -341,7 +340,7 @@ void CompileBinaryExpression::Compile(FunctionContext& ctx, const CHIR::BinaryEx
             break;
     }
     if (width && !comparison) {
-        IntegerUtil::NormalizeInteger(a, asmjit::x86::rax, width, type->IsSignedInteger());
+        TypeUtils::NormalizeInteger(a, asmjit::x86::rax, width, type->IsSignedInteger());
     }
     MemoryUtils::StoreValue(ctx, result, asmjit::x86::rax);
     if (normal && !ctx.GetFailure()) {
