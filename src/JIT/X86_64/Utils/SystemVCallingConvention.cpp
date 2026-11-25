@@ -14,6 +14,7 @@
 #include "cangjie/CHIR/IR/Annotation.h"
 #include "cangjie/CHIR/IR/Type/Type.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
+#include "cangjie/Utils/CheckUtils.h"
 
 namespace Cangjie::JIT::X86_64 {
 namespace {
@@ -215,9 +216,7 @@ std::optional<ParameterPlacement> SystemVCallingConvention::GetNativeParameterPl
     const auto* functionType = overrideType ? overrideType : function.GetFuncType();
     const auto& generics = function.GetGenericTypeParams();
     for (const auto* generic : generics) {
-        if (!generic) {
-            return std::nullopt;
-        }
+        CJC_ASSERT(generic);
     }
     return ComputePlacement(function, functionType, generics.size(), function.TestAttr(CHIR::Attribute::STATIC), true);
 }

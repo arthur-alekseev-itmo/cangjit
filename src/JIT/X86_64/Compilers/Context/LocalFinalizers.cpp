@@ -24,10 +24,6 @@ bool LocalFinalizers::Prepare()
 {
     const auto* function = context.GetFunction();
     const auto* body = function->GetBody();
-    if (!body) {
-        context.Fail(JitFailureKind::InvalidFunctionContext);
-        return false;
-    }
     for (const auto* block : body->GetAllBlocks()) {
         if (block->GetFuncOrLambdaBody() != body) {
             continue;

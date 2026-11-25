@@ -215,20 +215,9 @@ void CompileFunction::LoadReturnValueFromAddress(
     }
 }
 
-// TODO: Re-review this function after the helper extraction.
 void CompileFunction::Compile(FunctionContext& context) const
 {
-    if (context.GetFunction() != &function || !function.GetBody() || !function.GetBody()->GetEntryBlock()) {
-        context.Fail(JitFailureKind::InvalidFunctionContext);
-        return;
-    }
     const auto placements = SystemVCallingConvention::GetNativeParameterPlacement(function);
-    if (!placements || !placements->basePointerLocations.empty() ||
-        (placements->indirectReturn && !placements->abiReturnType->IsUnit() &&
-            !placements->abiReturnType->IsNothing())) {
-        context.Fail(JitFailureKind::UnsupportedCallingConvention);
-        return;
-    }
     if (!context.GetLocalFinalizers().Prepare()) {
         return;
     }
