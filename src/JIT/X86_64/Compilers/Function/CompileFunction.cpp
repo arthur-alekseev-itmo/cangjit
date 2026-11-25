@@ -68,10 +68,6 @@ CompilationResult CompileFunction::CompileToAddressImpl() const
     }
     if (const auto& failure = context.GetFailure()) {
         std::string message = GetJitFailureMessage(failure->kind);
-        if (failure->expressionKind) {
-            message += ": ";
-            message += CHIR::ExprKindMgr::Instance()->GetKindName(static_cast<size_t>(*failure->expressionKind));
-        }
         return CompilationResult::Failure({std::move(message)});
     }
     if (context.GetError() != asmjit::kErrorOk) {
@@ -82,63 +78,126 @@ CompilationResult CompileFunction::CompileToAddressImpl() const
 
 CompilationResult CompileFunction::Publish(FunctionContext& context) const
 {
-    auto& assembler = context.GetAssembler();
+    uint32_t codeSize = 0;
+    uint32_t frameSize = 0;
+    size_t metadataOffset = 0;
+    size_t metadataSize = 0;
+    CompilationError error;
+    if (!GetCodeSize(context, codeSize, error) || !GetFrameSize(context, frameSize, error) ||
+        !PrepareMetadata(context, codeSize, frameSize, metadataOffset, metadataSize, error)) {
+        return CompilationResult::Failure(std::move(error));
+    }
+    auto allocation = AllocateCode(context);
+    if (!allocation) {
+        return allocation;
+    }
+    const auto base = allocation.Value();
+    size_t publishedMetadataSize = 0;
+    if (!WriteMetadata(context, base, codeSize, metadataOffset, metadataSize, publishedMetadataSize, error)) {
+        globalContext.GetRuntime().release(reinterpret_cast<void*>(base));
+        return CompilationResult::Failure(std::move(error));
+    }
+    if (!RegisterLazyCallSites(context, base)) {
+        globalContext.GetRuntime().release(reinterpret_cast<void*>(base));
+        return CompilationResult::Failure({"failed to register lazy call sites"});
+    }
+    globalContext.GetLogger().LogFunctionCreated(function.GetIdentifier(), base + sizeof(uint32_t), codeSize,
+        frameSize, base + metadataOffset, publishedMetadataSize);
+    return CompilationResult::Success(base + sizeof(uint32_t));
+}
+
+bool CompileFunction::GetCodeSize(FunctionContext& context, uint32_t& codeSize, CompilationError& error) const
+{
     constexpr size_t PREFIX_SIZE = sizeof(uint32_t);
-    if (assembler.offset() <= PREFIX_SIZE || assembler.offset() - PREFIX_SIZE > UINT32_MAX) {
-        return CompilationResult::Failure({"invalid JIT code size"});
+    const auto offset = context.GetAssembler().offset();
+    if (offset <= PREFIX_SIZE || offset - PREFIX_SIZE > UINT32_MAX) {
+        error = {"invalid JIT code size"};
+        return false;
     }
-    const auto codeSize = static_cast<uint32_t>(assembler.offset() - PREFIX_SIZE);
+    codeSize = static_cast<uint32_t>(offset - PREFIX_SIZE);
+    return true;
+}
+
+bool CompileFunction::GetFrameSize(FunctionContext& context, uint32_t& frameSize, CompilationError& error) const
+{
     const auto slots = context.GetRegisterAllocation().GetStackSlotCount();
-    const auto frameSize = StackFrameUtils::GetFrameSize(slots + 1);
-    if (!frameSize) {
-        return CompilationResult::Failure({"JIT stack frame is too large"});
+    const auto size = StackFrameUtils::GetFrameSize(slots + 1);
+    if (!size) {
+        error = {"JIT stack frame is too large"};
+        return false;
     }
-    // Frame and descriptor publication are described in ai-docs/jit-function-frame-and-metadata.md.
-    context.GetMetadataBuilder().RecordFrame(*frameSize, {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX});
-    // The metadata is emitted in the same allocation as the code so that all
-    // descriptor-relative offsets are representable and have the same lifetime.
+    frameSize = *size;
+    return true;
+}
+
+bool CompileFunction::PrepareMetadata(FunctionContext& context, uint32_t codeSize, uint32_t frameSize,
+    size_t& metadataOffset, size_t& metadataSize, CompilationError& error) const
+{
+    auto& assembler = context.GetAssembler();
+    context.GetMetadataBuilder().RecordFrame(frameSize,
+        {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX});
     constexpr uintptr_t PROVISIONAL_CODE = 0x10000000;
     constexpr uintptr_t PROVISIONAL_METADATA = 0x20000000;
     auto provisional = context.GetMetadataBuilder().Build(PROVISIONAL_METADATA, PROVISIONAL_CODE, codeSize);
     if (!provisional) {
-        return CompilationResult::Failure({provisional.Error()});
+        error = {provisional.Error()};
+        return false;
     }
     assembler.align(asmjit::AlignMode::kData, 4);
-    const size_t metadataOffset = assembler.offset();
-    const auto& bytes = provisional.Value().descriptor;
-    assembler.embed(bytes.data(), bytes.size());
+    metadataOffset = assembler.offset();
+    const auto& descriptor = provisional.Value().descriptor;
+    metadataSize = descriptor.size();
+    assembler.embed(descriptor.data(), descriptor.size());
     if (context.GetError() != asmjit::kErrorOk) {
-        return CompilationResult::Failure({asmjit::DebugUtils::errorAsString(context.GetError())});
+        error = {asmjit::DebugUtils::errorAsString(context.GetError())};
+        return false;
     }
+    return true;
+}
+
+CompilationResult CompileFunction::AllocateCode(FunctionContext& context) const
+{
     void* address = nullptr;
     const auto error = globalContext.GetRuntime().add(&address, &context.GetCode());
     if (error != asmjit::kErrorOk) {
         return CompilationResult::Failure({asmjit::DebugUtils::errorAsString(error)});
     }
-    const auto base = reinterpret_cast<CodeAddress>(address);
-    auto metadata = context.GetMetadataBuilder().Build(base + metadataOffset, base + PREFIX_SIZE, codeSize);
-    if (!metadata) {
-        globalContext.GetRuntime().release(address);
-        return CompilationResult::Failure({metadata.Error()});
-    }
-    const auto& encoded = metadata.Value();
-    asmjit::JitAllocator::Span span;
-    auto* allocator = globalContext.GetRuntime().allocator();
-    if (encoded.descriptor.size() != bytes.size() || allocator->query(span, address) != asmjit::kErrorOk ||
-        allocator->write(span, metadataOffset, encoded.descriptor.data(), encoded.descriptor.size()) != asmjit::kErrorOk ||
-        allocator->write(span, 0, encoded.prefix.data(), encoded.prefix.size()) != asmjit::kErrorOk) {
-        globalContext.GetRuntime().release(address);
-        return CompilationResult::Failure({"failed to publish JIT metadata"});
-    }
-    if (!globalContext.GetLazyCallSiteRegistry().Register(base, context.GetCode().codeSize(), context.GetLazyCallSites())) {
-        globalContext.GetRuntime().release(address);
-        return CompilationResult::Failure({"failed to register lazy call sites"});
-    }
-    globalContext.GetLogger().LogFunctionCreated(function.GetIdentifier(), base + PREFIX_SIZE, codeSize,
-        static_cast<size_t>(*frameSize), base + metadataOffset, encoded.descriptor.size());
-    return CompilationResult::Success(base + PREFIX_SIZE);
+    return CompilationResult::Success(reinterpret_cast<CodeAddress>(address));
 }
 
+bool CompileFunction::WriteMetadata(FunctionContext& context, CodeAddress base, uint32_t codeSize,
+    size_t metadataOffset, size_t metadataSize, size_t& publishedMetadataSize, CompilationError& error) const
+{
+    auto metadata = context.GetMetadataBuilder().Build(base + metadataOffset, base + sizeof(uint32_t), codeSize);
+    if (!metadata) {
+        error = {metadata.Error()};
+        return false;
+    }
+    const auto& encoded = metadata.Value();
+    publishedMetadataSize = encoded.descriptor.size();
+    asmjit::JitAllocator::Span span;
+    auto* allocator = globalContext.GetRuntime().allocator();
+    if (publishedMetadataSize != metadataSize || allocator->query(span, reinterpret_cast<void*>(base)) != asmjit::kErrorOk ||
+        allocator->write(span, metadataOffset, encoded.descriptor.data(), publishedMetadataSize) != asmjit::kErrorOk ||
+        allocator->write(span, 0, encoded.prefix.data(), encoded.prefix.size()) != asmjit::kErrorOk) {
+        error = {"failed to publish JIT metadata"};
+        return false;
+    }
+    return true;
+}
+
+bool CompileFunction::RegisterLazyCallSites(FunctionContext& context, CodeAddress base) const
+{
+    return globalContext.GetLazyCallSiteRegistry().Register(
+        base, context.GetCode().codeSize(), context.GetLazyCallSites());
+}
+
+/// Function prologue:
+///   push rbp
+///   mov rbp rsp
+///   call L1
+/// L1:
+///   sub rsp <stack_space>
 void CompileFunction::MakePrologue(FunctionContext& context) const
 {
     const auto slots = context.GetRegisterAllocation().GetStackSlotCount();
@@ -148,9 +207,6 @@ void CompileFunction::MakePrologue(FunctionContext& context) const
         return;
     }
     auto& assembler = context.GetAssembler();
-    // The runtime recovers the entry from the return address at [rbp - 8].
-    // push (1 byte), mov (3 bytes), and the relative call (5 bytes) make
-    // that address exactly entry + 9, as required by FrameInfo.
     const auto marker = assembler.newLabel();
     assembler.push(asmjit::x86::rbp);
     assembler.mov(asmjit::x86::rbp, asmjit::x86::rsp);
@@ -161,11 +217,16 @@ void CompileFunction::MakePrologue(FunctionContext& context) const
     }
 }
 
-void CompileFunction::MakeEpilogue(FunctionContext& context) const
+/// Function epilogue:
+/// L<epiloge_label>:
+///   mov rsp rbp
+///   pop rbp
+///   ret
+void CompileFunction::MakeEpilogue(FunctionContext& context, const ParameterPlacement& placement) const
 {
     auto& assembler = context.GetAssembler();
     assembler.bind(context.GetEpilogueLabel());
-    if (!SaveReturnValue(context)) {
+    if (!SaveReturnValue(context, placement)) {
         return;
     }
     assembler.mov(asmjit::x86::rsp, asmjit::x86::rbp);
@@ -173,50 +234,34 @@ void CompileFunction::MakeEpilogue(FunctionContext& context) const
     assembler.ret();
 }
 
-bool CompileFunction::SaveReturnValue(FunctionContext& context) const
+bool CompileFunction::SaveReturnValue(FunctionContext& context, const ParameterPlacement& placement) const
 {
     const auto* type = function.GetReturnType();
     if (type->IsUnit() || type->IsVoid() || type->IsNothing()) {
         return true;
     }
-    const auto width = TypeUtils::TypeWidth(*type);
-    if (!width) {
+    if (placement.indirectReturn || !placement.returnLocation) {
         context.Fail(JitFailureKind::UnsupportedReturnType);
         return false;
     }
-    if (!MemoryUtils::LoadValue(context, function.GetReturnValue(), asmjit::x86::rax)) {
+    const auto* result = function.GetReturnValue();
+    const auto id = context.GetValueNumeration().GetId(result);
+    const auto slot = id ? context.GetRegisterAllocation().GetAllocationSlot(*id) : std::nullopt;
+    if (!slot || !TypeUtils::TypeWidth(*type) || type->GetTypeKind() == CHIR::Type::TYPE_FLOAT16) {
+        context.Fail(JitFailureKind::UnsupportedReturnType);
         return false;
     }
-    LoadReturnValueFromAddress(context, *type, width);
-    return true;
+    return MemoryUtils::Move(context, *placement.returnLocation, Location::Stack(*slot), *type, asmjit::x86::rax);
 }
 
-void CompileFunction::LoadReturnValueFromAddress(
-    FunctionContext& context, const CHIR::Type& type, unsigned width) const
-{
-    auto& assembler = context.GetAssembler();
-    const auto kind = type.GetTypeKind();
-    if (kind == CHIR::Type::TYPE_FLOAT32) {
-        assembler.movss(asmjit::x86::xmm0, asmjit::x86::dword_ptr(asmjit::x86::rax));
-    } else if (kind == CHIR::Type::TYPE_FLOAT64) {
-        assembler.movsd(asmjit::x86::xmm0, asmjit::x86::qword_ptr(asmjit::x86::rax));
-    } else if (width == 8) {
-        assembler.movzx(asmjit::x86::eax, asmjit::x86::byte_ptr(asmjit::x86::rax));
-        TypeUtils::NormalizeInteger(assembler, asmjit::x86::rax, width, type.IsSignedInteger());
-    } else if (width == 16) {
-        assembler.movzx(asmjit::x86::eax, asmjit::x86::word_ptr(asmjit::x86::rax));
-        TypeUtils::NormalizeInteger(assembler, asmjit::x86::rax, width, type.IsSignedInteger());
-    } else if (width == 32) {
-        assembler.mov(asmjit::x86::eax, asmjit::x86::dword_ptr(asmjit::x86::rax));
-        TypeUtils::NormalizeInteger(assembler, asmjit::x86::rax, width, type.IsSignedInteger());
-    } else {
-        assembler.mov(asmjit::x86::rax, asmjit::x86::qword_ptr(asmjit::x86::rax));
-    }
-}
 
 void CompileFunction::Compile(FunctionContext& context) const
 {
     const auto placements = SystemVCallingConvention::GetNativeParameterPlacement(function);
+    if (!placements) {
+        context.Fail(JitFailureKind::UnsupportedCallingConvention);
+        return;
+    }
     if (!context.GetLocalFinalizers().Prepare()) {
         return;
     }
@@ -240,7 +285,7 @@ void CompileFunction::Compile(FunctionContext& context) const
             return;
         }
     }
-    MakeEpilogue(context);
+    MakeEpilogue(context, *placements);
     context.GetLocalFinalizers().EmitEdges();
 }
 
@@ -292,7 +337,7 @@ bool CompileFunction::SaveHiddenTypeInfoLocation(FunctionContext& context, const
         return false;
     }
     auto& a = context.GetAssembler();
-    if (const auto* reg = location.AsRegister()) {
+    if (const auto* reg = location.AsGpRegister()) {
         const auto source = RegisterUtils::Get64BitRegister(reg->type);
         if (!source) {
             context.Fail(JitFailureKind::UnsupportedCallingConvention);

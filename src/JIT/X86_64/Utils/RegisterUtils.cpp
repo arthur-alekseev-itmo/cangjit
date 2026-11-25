@@ -10,14 +10,14 @@
 
 
 namespace Cangjie::JIT::X86_64 {
-std::optional<asmjit::x86::Gpq> RegisterUtils::Get64BitRegister(RegisterType type) noexcept
+std::optional<asmjit::x86::Gpq> RegisterUtils::Get64BitRegister(GPRegisterType type) noexcept
 {
     namespace x86 = asmjit::x86;
-    static const std::array<x86::Gpq, static_cast<size_t>(RegisterType::COUNT)> registers = {
+    static const std::array<x86::Gpq, static_cast<size_t>(GPRegisterType::COUNT)> registers = {
         x86::rax, x86::rbx, x86::rcx, x86::rdx, x86::rsi, x86::rdi, x86::rbp, x86::rsp,
         x86::r8, x86::r9, x86::r10, x86::r11, x86::r12, x86::r13, x86::r14, x86::r15};
     const auto index = static_cast<size_t>(type);
-    if (index >= registers.size() || type == RegisterType::RBP || type == RegisterType::RSP) {
+    if (index >= registers.size() || type == GPRegisterType::RBP || type == GPRegisterType::RSP) {
         return std::nullopt;
     }
     return registers[index];

@@ -203,7 +203,7 @@ void CompileCall(FunctionContext& context, const CHIR::DynamicDispatch& expressi
             return;
         }
         const auto& location = it->second;
-        if (const auto* reg = location.AsRegister()) {
+        if (const auto* reg = location.AsGpRegister()) {
             const auto target = RegisterUtils::Get64BitRegister(reg->type);
             if (!target || !MemoryUtils::LoadValue(context, args[i], *target)) {
                 context.Fail(JitFailureKind::UnsupportedCall, expression.GetExprKind());

@@ -16,7 +16,7 @@
 namespace Cangjie::JIT::X86_64 {
 class RegisterUtils final {
 public:
-    static std::optional<asmjit::x86::Gpq> Get64BitRegister(RegisterType type) noexcept;
+    static std::optional<asmjit::x86::Gpq> Get64BitRegister(GPRegisterType type) noexcept;
     static std::optional<asmjit::x86::Xmm> GetArgumentSimdRegister(size_t index) noexcept;
     static bool IsDataRegister(const asmjit::x86::Gp& reg) noexcept;
 };

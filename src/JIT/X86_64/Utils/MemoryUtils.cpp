@@ -32,7 +32,7 @@ bool ResolveLocation(FunctionContext& context, const Location& location, JitFail
     ResolvedLocation& result)
 {
     namespace x86 = asmjit::x86;
-    if (const auto* reg = location.AsRegister()) {
+    if (const auto* reg = location.AsGpRegister()) {
         auto physical = RegisterUtils::Get64BitRegister(reg->type);
         if (reg->width != OperandWidth::QWORD || !physical) {
             context.Fail(failure);
@@ -69,8 +69,8 @@ bool IsMoveRegister(FunctionContext& context, const asmjit::x86::Gp& reg)
 }
 bool IsSameLocation(const Location& left, const Location& right)
 {
-    if (const auto* reg = left.AsRegister()) {
-        const auto* other = right.AsRegister();
+    if (const auto* reg = left.AsGpRegister()) {
+        const auto* other = right.AsGpRegister();
         return other && reg->type == other->type;
     }
     if (const auto* simd = left.AsSimdRegister()) {
@@ -102,7 +102,7 @@ asmjit::x86::Mem GetMoveMemory(FunctionContext& context, const Location& locatio
 void LoadMoveSource(FunctionContext& context, const Location& source, const asmjit::x86::Gp& target)
 {
     auto& assembler = context.GetAssembler();
-    if (const auto* reg = source.AsRegister()) {
+    if (const auto* reg = source.AsGpRegister()) {
         const auto physical = RegisterUtils::Get64BitRegister(reg->type);
         if (physical->id() != target.id()) {
             assembler.mov(target, *physical);
@@ -123,7 +123,7 @@ void StoreMoveDestination(FunctionContext& context, const Location& destination,
     const asmjit::x86::Gp& source)
 {
     auto& assembler = context.GetAssembler();
-    if (const auto* reg = destination.AsRegister()) {
+    if (const auto* reg = destination.AsGpRegister()) {
         const auto physical = RegisterUtils::Get64BitRegister(reg->type);
         if (physical->id() != source.id()) {
             assembler.mov(*physical, source);
@@ -146,7 +146,7 @@ unsigned MoveWidth(const CHIR::Type& type, const Location& source)
     if (width) {
         return width;
     }
-    if (const auto* reg = source.AsRegister()) {
+    if (const auto* reg = source.AsGpRegister()) {
         return 8U << static_cast<unsigned>(reg->width);
     }
     if (const auto* simd = source.AsSimdRegister()) {
@@ -389,7 +389,7 @@ bool MemoryUtils::PlaceTypeInfo(
         context.Fail(JitFailureKind::UnsupportedCallingConvention);
         return false;
     }
-    if (const auto* reg = location.AsRegister()) {
+    if (const auto* reg = location.AsGpRegister()) {
         const auto target = RegisterUtils::Get64BitRegister(reg->type);
         if (!target) {
             context.Fail(JitFailureKind::UnsupportedCallingConvention);
@@ -437,7 +437,7 @@ bool MemoryUtils::PlaceStagedTypeInfo(
     FunctionContext& context, const Location& location, uint32_t stackSize, int32_t scratchOffset)
 {
     auto& assembler = context.GetAssembler();
-    if (const auto* reg = location.AsRegister()) {
+    if (const auto* reg = location.AsGpRegister()) {
         const auto target = RegisterUtils::Get64BitRegister(reg->type);
         if (!target) {
             context.Fail(JitFailureKind::UnsupportedCallingConvention);
@@ -491,8 +491,8 @@ bool MemoryUtils::Move(FunctionContext& context, const Location& destination, co
     if (IsSameLocation(destination, source) && (floating || !width || width == 64)) {
         return context.GetError() == asmjit::kErrorOk;
     }
-    if (const auto* from = source.AsRegister()) {
-        if (const auto* to = destination.AsRegister()) {
+    if (const auto* from = source.AsGpRegister()) {
+        if (const auto* to = destination.AsGpRegister()) {
             const auto sourceRegister = RegisterUtils::Get64BitRegister(from->type);
             const auto destinationRegister = RegisterUtils::Get64BitRegister(to->type);
             if (sourceRegister->id() != destinationRegister->id()) {

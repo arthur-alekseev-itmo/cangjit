@@ -95,8 +95,8 @@ bool SupportedSignature(const CHIR::Function& function, std::vector<int32_t>& gc
         return false;
     }
     if (placement->indirectReturn) {
-        const auto* reg = placement->sretLocation ? placement->sretLocation->AsRegister() : nullptr;
-        if (!reg || reg->type != RegisterType::RDI || reg->index != 0) {
+        const auto* reg = placement->sretLocation ? placement->sretLocation->AsGpRegister() : nullptr;
+        if (!reg || reg->type != GPRegisterType::RDI || reg->index != 0) {
             return false;
         }
         stackSlots.push_back(-16);
@@ -113,7 +113,7 @@ bool SupportedSignature(const CHIR::Function& function, std::vector<int32_t>& gc
         if (!IsObjectReference(*type->second)) {
             continue;
         }
-        if (const auto* reg = location->second.AsRegister()) {
+        if (const auto* reg = location->second.AsGpRegister()) {
             if (reg->index >= 6) {
                 return false;
             }

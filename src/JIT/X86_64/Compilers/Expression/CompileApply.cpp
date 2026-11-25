@@ -165,7 +165,7 @@ bool PlaceArguments(FunctionContext& context, const CHIR::ApplyBase& expression,
             return false;
         }
         const auto& location = it->second;
-        if (const auto* reg = location.AsRegister()) {
+        if (const auto* reg = location.AsGpRegister()) {
             const auto target = RegisterUtils::Get64BitRegister(reg->type);
             if (!target || !MemoryUtils::LoadValue(context, expression.GetOperand(i + 1), *target)) {
                 context.Fail(JitFailureKind::UnsupportedCallingConvention);

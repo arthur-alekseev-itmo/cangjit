@@ -32,11 +32,19 @@ public:
 private:
     CompilationResult CompileToAddressImpl() const;
     CompilationResult Publish(FunctionContext& context) const;
+
+    bool GetCodeSize(FunctionContext& context, uint32_t& codeSize, CompilationError& error) const;
+    bool GetFrameSize(FunctionContext& context, uint32_t& frameSize, CompilationError& error) const;
+    bool PrepareMetadata(FunctionContext& context, uint32_t codeSize, uint32_t frameSize, size_t& metadataOffset,
+        size_t& metadataSize, CompilationError& error) const;
+    CompilationResult AllocateCode(FunctionContext& context) const;
+    bool WriteMetadata(FunctionContext& context, CodeAddress base, uint32_t codeSize, size_t metadataOffset,
+        size_t metadataSize, size_t& publishedMetadataSize, CompilationError& error) const;
+    bool RegisterLazyCallSites(FunctionContext& context, CodeAddress base) const;
     void PrintDebugInfo(const FunctionContext& context) const;
     void MakePrologue(FunctionContext& context) const;
-    void MakeEpilogue(FunctionContext& context) const;
-    bool SaveReturnValue(FunctionContext& context) const;
-    void LoadReturnValueFromAddress(FunctionContext& context, const CHIR::Type& type, unsigned width) const;
+    void MakeEpilogue(FunctionContext& context, const ParameterPlacement& placement) const;
+    bool SaveReturnValue(FunctionContext& context, const ParameterPlacement& placement) const;
     bool SaveParameters(FunctionContext& context, const ParameterPlacement& placements) const;
     bool SaveParameter(FunctionContext& context, const ParameterPlacement& placements,
         const CHIR::Parameter* parameter) const;

@@ -13,7 +13,7 @@
 
 namespace Cangjie::JIT::X86_64 {
 
-enum class RegisterType : uint8_t {
+enum class GPRegisterType : uint8_t {
     RAX,
     RBX,
     RCX,
@@ -45,9 +45,9 @@ class Location final {
 public:
     using Index = size_t;
 
-    struct RegisterLocation {
+    struct GpRegisterLocation {
         Index index;
-        RegisterType type;
+        GPRegisterType type;
         OperandWidth width;
     };
 
@@ -64,11 +64,11 @@ public:
         Index index;
     };
 
-    using Value = std::variant<RegisterLocation, StackLocation, SimdRegisterLocation, IncomingStackLocation>;
+    using Value = std::variant<GpRegisterLocation, StackLocation, SimdRegisterLocation, IncomingStackLocation>;
 
-    static Location Register(Index index, RegisterType type, OperandWidth width) noexcept
+    static Location GpRegister(Index index, GPRegisterType type, OperandWidth width) noexcept
     {
-        return Location(RegisterLocation{index, type, width});
+        return Location(GpRegisterLocation{index, type, width});
     }
 
     static Location Stack(Index index) noexcept
@@ -91,9 +91,9 @@ public:
         return std::holds_alternative<StackLocation>(value);
     }
 
-    const RegisterLocation* AsRegister() const noexcept
+    const GpRegisterLocation* AsGpRegister() const noexcept
     {
-        return std::get_if<RegisterLocation>(&value);
+        return std::get_if<GpRegisterLocation>(&value);
     }
 
     const StackLocation* AsStack() const noexcept
@@ -112,7 +112,7 @@ public:
     }
 
 private:
-    explicit Location(RegisterLocation location) noexcept : value(location)
+    explicit Location(GpRegisterLocation location) noexcept : value(location)
     {
     }
 

@@ -19,8 +19,8 @@
 namespace Cangjie::JIT::X86_64 {
 namespace {
 using Type = CHIR::Type;
-constexpr std::array<RegisterType, 6> INTEGER_REGISTERS = {RegisterType::RDI, RegisterType::RSI,
-    RegisterType::RDX, RegisterType::RCX, RegisterType::R8, RegisterType::R9};
+constexpr std::array<GPRegisterType, 6> INTEGER_REGISTERS = {GPRegisterType::RDI, GPRegisterType::RSI,
+    GPRegisterType::RDX, GPRegisterType::RCX, GPRegisterType::R8, GPRegisterType::R9};
 constexpr size_t SIMD_REGISTER_COUNT = 8;
 
 enum class ArgumentClass { INTEGER, SIMD, UNSUPPORTED };
@@ -136,7 +136,7 @@ std::optional<ParameterPlacement> ComputePlacement(const CHIR::Function& functio
     auto nextInteger = [&](OperandWidth width) {
         if (integerIndex < INTEGER_REGISTERS.size()) {
             const size_t index = integerIndex++;
-            return Location::Register(index, INTEGER_REGISTERS[index], width);
+            return Location::GpRegister(index, INTEGER_REGISTERS[index], width);
         }
         return Location::IncomingStack(stackIndex++);
     };
@@ -149,7 +149,7 @@ std::optional<ParameterPlacement> ComputePlacement(const CHIR::Function& functio
         if (Classify(*returnType, isC) == ArgumentClass::SIMD) {
             placement.returnLocation = Location::SimdRegister(0, Width(*returnType));
         } else {
-            placement.returnLocation = Location::Register(0, RegisterType::RAX, Width(*returnType));
+            placement.returnLocation = Location::GpRegister(0, GPRegisterType::RAX, Width(*returnType));
         }
     }
     placement.locations.reserve(parameters.size());

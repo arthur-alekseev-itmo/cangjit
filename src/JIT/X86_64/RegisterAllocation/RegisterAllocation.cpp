@@ -12,7 +12,7 @@
 
 namespace Cangjie::JIT::X86_64 {
 namespace {
-constexpr size_t REGISTER_TYPE_COUNT = static_cast<size_t>(RegisterType::COUNT);
+constexpr size_t REGISTER_TYPE_COUNT = static_cast<size_t>(GPRegisterType::COUNT);
 constexpr size_t OPERAND_WIDTH_COUNT = static_cast<size_t>(OperandWidth::COUNT);
 
 constexpr const char* REGISTER_NAMES[REGISTER_TYPE_COUNT][OPERAND_WIDTH_COUNT] = {
@@ -34,7 +34,7 @@ constexpr const char* REGISTER_NAMES[REGISTER_TYPE_COUNT][OPERAND_WIDTH_COUNT] =
     {"R15B", "R15W", "R15D", "R15"},
 };
 
-const char* GetRegisterName(RegisterType type, OperandWidth width) noexcept
+const char* GetRegisterName(GPRegisterType type, OperandWidth width) noexcept
 {
     const auto registerIndex = static_cast<size_t>(type);
     const auto widthIndex = static_cast<size_t>(width);
@@ -50,7 +50,7 @@ void DumpLocation(const Location& location, std::ostream& output)
         output << "STACK(" << stack->index << ')';
         return;
     }
-    if (const auto* reg = location.AsRegister(); reg != nullptr) {
+    if (const auto* reg = location.AsGpRegister(); reg != nullptr) {
         output << "REG(" << reg->index << ", " << GetRegisterName(reg->type, reg->width) << ')';
         return;
     }
