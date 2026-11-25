@@ -11,6 +11,7 @@
 
 #include "RegisterUtils.h"
 #include "StackFrameUtils.h"
+#include "TypeUtils.h"
 
 #include "../Compilers/Context/FunctionContext.h"
 #include "../Compilers/Context/GlobalContext.h"
@@ -66,6 +67,99 @@ bool IsMoveRegister(FunctionContext& context, const asmjit::x86::Gp& reg)
     }
     return true;
 }
+bool IsSameLocation(const Location& left, const Location& right)
+{
+    if (const auto* reg = left.AsRegister()) {
+        const auto* other = right.AsRegister();
+        return other && reg->type == other->type;
+    }
+    if (const auto* simd = left.AsSimdRegister()) {
+        const auto* other = right.AsSimdRegister();
+        return other && simd->index == other->index;
+    }
+    if (const auto* stack = left.AsStack()) {
+        const auto* other = right.AsStack();
+        return other && stack->index == other->index;
+    }
+    const auto* stack = left.AsIncomingStack();
+    const auto* other = right.AsIncomingStack();
+    return other && stack->index == other->index;
+}
+
+asmjit::x86::Mem GetMoveMemory(FunctionContext& context, const Location& location)
+{
+    namespace x86 = asmjit::x86;
+    if (const auto* stack = location.AsStack()) {
+        const auto offset = StackFrameUtils::GetSlotOffset(
+            stack->index, context.GetRegisterAllocation().GetStackSlotCount());
+        return x86::qword_ptr(x86::rbp, *offset);
+    }
+    const auto* stack = location.AsIncomingStack();
+    const auto offset = StackFrameUtils::GetIncomingArgumentOffset(stack->index);
+    return x86::qword_ptr(x86::rbp, *offset);
+}
+
+void LoadMoveSource(FunctionContext& context, const Location& source, const asmjit::x86::Gp& target)
+{
+    auto& assembler = context.GetAssembler();
+    if (const auto* reg = source.AsRegister()) {
+        const auto physical = RegisterUtils::Get64BitRegister(reg->type);
+        if (physical->id() != target.id()) {
+            assembler.mov(target, *physical);
+        }
+    } else if (const auto* simd = source.AsSimdRegister()) {
+        const auto physical = RegisterUtils::GetArgumentSimdRegister(simd->index);
+        if (simd->width == OperandWidth::QWORD) {
+            assembler.movq(target, *physical);
+        } else {
+            assembler.movd(target.r32(), *physical);
+        }
+    } else {
+        assembler.mov(target, GetMoveMemory(context, source));
+    }
+}
+
+void StoreMoveDestination(FunctionContext& context, const Location& destination,
+    const asmjit::x86::Gp& source)
+{
+    auto& assembler = context.GetAssembler();
+    if (const auto* reg = destination.AsRegister()) {
+        const auto physical = RegisterUtils::Get64BitRegister(reg->type);
+        if (physical->id() != source.id()) {
+            assembler.mov(*physical, source);
+        }
+    } else if (const auto* simd = destination.AsSimdRegister()) {
+        const auto physical = RegisterUtils::GetArgumentSimdRegister(simd->index);
+        if (simd->width == OperandWidth::QWORD) {
+            assembler.movq(*physical, source);
+        } else {
+            assembler.movd(*physical, source.r32());
+        }
+    } else {
+        assembler.mov(GetMoveMemory(context, destination), source);
+    }
+}
+
+unsigned MoveWidth(const CHIR::Type& type, const Location& source)
+{
+    const auto width = TypeUtils::TypeWidth(type);
+    if (width) {
+        return width;
+    }
+    if (const auto* reg = source.AsRegister()) {
+        return 8U << static_cast<unsigned>(reg->width);
+    }
+    if (const auto* simd = source.AsSimdRegister()) {
+        return 8U << static_cast<unsigned>(simd->width);
+    }
+    return 0;
+}
+
+bool IsFloatingValue(const CHIR::Type& type)
+{
+    return type.GetTypeKind() == CHIR::Type::TYPE_FLOAT16 || TypeUtils::IsFloating(type);
+}
+
 } // namespace
 
 bool MemoryUtils::LoadValue(FunctionContext& context, const CHIR::Value* value, const asmjit::x86::Gp& target)
@@ -389,31 +483,46 @@ bool MemoryUtils::ZeroStackValueAndLoadAddress(
 }
 
 bool MemoryUtils::Move(FunctionContext& context, const Location& destination, const Location& source,
-    const asmjit::x86::Gp& scratch)
+    const CHIR::Type& type, const asmjit::x86::Gp& scratch)
 {
-    ResolvedLocation from;
-    ResolvedLocation to;
-    if (!ResolveLocation(context, source, JitFailureKind::UnsupportedMoveSource, from) ||
-        !ResolveLocation(context, destination, JitFailureKind::UnsupportedMoveDestination, to)) {
-        return false;
-    }
     auto& assembler = context.GetAssembler();
-    if (from.isRegister && to.isRegister) {
-        if (from.reg.id() != to.reg.id()) {
-            assembler.mov(to.reg, from.reg);
-        }
-    } else if (from.isRegister) {
-        assembler.mov(to.memory, from.reg);
-    } else if (to.isRegister) {
-        assembler.mov(to.reg, from.memory);
-    } else if (source.AsStack()->index != destination.AsStack()->index) {
-        if (!RegisterUtils::IsDataRegister(scratch)) {
-            context.Fail(JitFailureKind::InvalidMoveScratch);
-            return false;
-        }
-        assembler.mov(scratch, from.memory);
-        assembler.mov(to.memory, scratch);
+    const auto width = MoveWidth(type, source);
+    const bool floating = IsFloatingValue(type);
+    if (IsSameLocation(destination, source) && (floating || !width || width == 64)) {
+        return context.GetError() == asmjit::kErrorOk;
     }
+    if (const auto* from = source.AsRegister()) {
+        if (const auto* to = destination.AsRegister()) {
+            const auto sourceRegister = RegisterUtils::Get64BitRegister(from->type);
+            const auto destinationRegister = RegisterUtils::Get64BitRegister(to->type);
+            if (sourceRegister->id() != destinationRegister->id()) {
+                assembler.mov(*destinationRegister, *sourceRegister);
+            }
+            if (!floating && width && width != 64) {
+                TypeUtils::NormalizeInteger(assembler, *destinationRegister, width, type.IsSignedInteger());
+            }
+            return context.GetError() == asmjit::kErrorOk;
+        }
+    }
+    if (const auto* from = source.AsSimdRegister()) {
+        if (const auto* to = destination.AsSimdRegister()) {
+            const auto sourceRegister = RegisterUtils::GetArgumentSimdRegister(from->index);
+            const auto destinationRegister = RegisterUtils::GetArgumentSimdRegister(to->index);
+            if (sourceRegister->id() != destinationRegister->id()) {
+                if (width == 64) {
+                    assembler.movsd(*destinationRegister, *sourceRegister);
+                } else {
+                    assembler.movss(*destinationRegister, *sourceRegister);
+                }
+            }
+            return context.GetError() == asmjit::kErrorOk;
+        }
+    }
+    LoadMoveSource(context, source, scratch);
+    if (!floating && width && width != 64) {
+        TypeUtils::NormalizeInteger(assembler, scratch, width, type.IsSignedInteger());
+    }
+    StoreMoveDestination(context, destination, scratch);
     return context.GetError() == asmjit::kErrorOk;
 }
 } // namespace Cangjie::JIT::X86_64

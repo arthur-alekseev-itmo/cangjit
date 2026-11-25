@@ -46,8 +46,9 @@ public:
     static bool ZeroStackValueAndLoadAddress(
         FunctionContext& context, const CHIR::Value* value, const asmjit::x86::Gp& target);
 
+    // The scratch register is clobbered and must not alias a live source.
     static bool Move(FunctionContext& context, const Location& destination, const Location& source,
-        const asmjit::x86::Gp& scratch);
+        const CHIR::Type& type, const asmjit::x86::Gp& scratch);
 
 private:
     static bool LoadLiteral(FunctionContext& context, const CHIR::LiteralValue& literal, const asmjit::x86::Gp& target);

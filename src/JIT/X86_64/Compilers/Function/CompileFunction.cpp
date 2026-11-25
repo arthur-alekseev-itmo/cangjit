@@ -258,45 +258,10 @@ bool CompileFunction::SaveParameter(FunctionContext& context, const ParameterPla
     const CHIR::Parameter* parameter) const
 {
     const auto* type = parameter->GetType();
-    const auto width = TypeUtils::TypeWidth(*type);
-    const bool floating = TypeUtils::IsFloating(*type);
-    const auto location = placements.locations.at(parameter);
     const auto id = context.GetValueNumeration().GetId(parameter);
-    if ((!width && !floating) || !context.GetRegisterAllocation().GetLocation(*id).IsStack()) {
-        context.Fail(JitFailureKind::UnsupportedParameters);
-        return false;
-    }
-    if (const auto* simd = location.AsSimdRegister()) {
-        const auto source = RegisterUtils::GetArgumentSimdRegister(simd->index);
-        if (!floating || !source || !MemoryUtils::StoreFloatValue(context, parameter, *source, asmjit::x86::rax)) {
-            context.Fail(JitFailureKind::UnsupportedParameters);
-            return false;
-        }
-        return true;
-    }
-    auto& assembler = context.GetAssembler();
-    if (const auto* reg = location.AsRegister()) {
-        const auto source = RegisterUtils::Get64BitRegister(reg->type);
-        if (!source) {
-            context.Fail(JitFailureKind::UnsupportedParameters);
-            return false;
-        }
-        assembler.mov(asmjit::x86::rax, *source);
-    } else if (const auto* stack = location.AsIncomingStack()) {
-        const auto offset = StackFrameUtils::GetIncomingArgumentOffset(stack->index);
-        if (!offset) {
-            context.Fail(JitFailureKind::UnsupportedParameters);
-            return false;
-        }
-        assembler.mov(asmjit::x86::rax, asmjit::x86::qword_ptr(asmjit::x86::rbp, *offset));
-    } else {
-        context.Fail(JitFailureKind::UnsupportedParameters);
-        return false;
-    }
-    if (!floating && width) {
-        TypeUtils::NormalizeInteger(assembler, asmjit::x86::rax, width, type->IsSignedInteger());
-    }
-    return MemoryUtils::StoreValue(context, parameter, asmjit::x86::rax);
+    const auto& destination = context.GetRegisterAllocation().GetLocation(*id);
+    const auto& source = placements.locations.at(parameter);
+    return MemoryUtils::Move(context, destination, source, *type, asmjit::x86::rax);
 }
 
 bool CompileFunction::SaveHiddenTypeInfo(FunctionContext& context, const ParameterPlacement& placements) const

@@ -31,6 +31,12 @@ unsigned TypeUtils::TypeWidth(const CHIR::Type& type) noexcept
     if (type.IsRef() || type.IsCPointer() || type.IsCString()) {
         return 64;
     }
+    if (type.GetTypeKind() == T::TYPE_FLOAT16) {
+        return 16;
+    }
+    if (type.GetTypeKind() == T::TYPE_RUNE) {
+        return 32;
+    }
     if (type.GetTypeKind() == T::TYPE_FLOAT32) {
         return 32;
     }
