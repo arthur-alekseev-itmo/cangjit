@@ -12,9 +12,6 @@
 
 #include "../Location.h"
 
-namespace Cangjie::CHIR {
-class Type;
-}
 
 namespace Cangjie::JIT::X86_64 {
 class RegisterUtils final {
@@ -22,9 +19,6 @@ public:
     static std::optional<asmjit::x86::Gpq> Get64BitRegister(RegisterType type) noexcept;
     static std::optional<asmjit::x86::Xmm> GetArgumentSimdRegister(size_t index) noexcept;
     static bool IsDataRegister(const asmjit::x86::Gp& reg) noexcept;
-    static unsigned IntegerWidth(const CHIR::Type& type) noexcept;
-    static void NormalizeInteger(asmjit::x86::Assembler& assembler, const asmjit::x86::Gp& reg,
-        unsigned width, bool isSigned);
 };
 } // namespace Cangjie::JIT::X86_64
 

@@ -13,6 +13,7 @@
 #include "../Context/FunctionContext.h"
 #include "../Context/GlobalContext.h"
 #include "../../Utils/MemoryUtils.h"
+#include "../../Utils/IntegerUtil.h"
 #include "../../Utils/RegisterUtils.h"
 #include "../../Utils/SystemVCallingConvention.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
@@ -253,9 +254,9 @@ void CompileCall(FunctionContext& context, const CHIR::DynamicDispatch& expressi
                 return;
             }
         } else {
-            const auto width = returnType->IsBoolean() ? 8U : RegisterUtils::IntegerWidth(*returnType);
+            const auto width = returnType->IsBoolean() ? 8U : IntegerUtil::IntegerWidth(*returnType);
             if (width) {
-                RegisterUtils::NormalizeInteger(a, x86::rax, width, returnType->IsSignedInteger());
+                IntegerUtil::NormalizeInteger(a, x86::rax, width, returnType->IsSignedInteger());
             } else if (!returnType->IsRef() && !returnType->IsCPointer() && !returnType->IsCString()) {
                 context.Fail(JitFailureKind::UnsupportedReturnType, expression.GetExprKind());
                 return;

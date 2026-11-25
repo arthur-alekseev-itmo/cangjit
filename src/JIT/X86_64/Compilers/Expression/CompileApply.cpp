@@ -11,6 +11,7 @@
 #include "../Function/CompileFunctionStub.h"
 #include "../../Utils/SystemVCallingConvention.h"
 #include "../../Utils/MemoryUtils.h"
+#include "../../Utils/IntegerUtil.h"
 #include "../../Utils/RegisterUtils.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Expression/Terminator.h"
@@ -52,7 +53,7 @@ const CHIR::Function* ValidateCall(FunctionContext& context, const CHIR::ApplyBa
         ? static_cast<const CHIR::RefType*>(returnType)->GetBaseType() : nullptr;
     const bool objectReturn = returnBase &&
         (returnBase->IsClass() || returnBase->IsRawArray() || returnBase->IsBox());
-    if (!noResult && !RegisterUtils::IntegerWidth(*returnType) && !returnType->IsBoolean() &&
+    if (!noResult && !IntegerUtil::IntegerWidth(*returnType) && !returnType->IsBoolean() &&
         !objectReturn && !returnType->IsCPointer() && !returnType->IsCString() && !IsScalarFloat(*returnType)) {
         context.Fail(JitFailureKind::UnsupportedReturnType);
         return nullptr;
@@ -70,7 +71,7 @@ bool ValidateArguments(FunctionContext& context, const CHIR::ApplyBase& expressi
     for (size_t i = 0; i < parameters.size(); ++i) {
         const auto* parameter = parameters[i];
         const auto* argument = expression.GetOperand(i + 1);
-        if ((!RegisterUtils::IntegerWidth(*parameter->GetType()) && !parameter->GetType()->IsBoolean() &&
+        if ((!IntegerUtil::IntegerWidth(*parameter->GetType()) && !parameter->GetType()->IsBoolean() &&
             !parameter->GetType()->IsRef() && !IsScalarFloat(*parameter->GetType())) ||
             !argument || !argument->GetType() ||
             argument->GetType()->GetTypeKind() != parameter->GetType()->GetTypeKind()) {
@@ -239,9 +240,9 @@ void EmitCall(FunctionContext& context, const CHIR::ApplyBase& expression, const
                 return;
             }
         } else {
-            const auto width = returnType->IsBoolean() ? 8U : RegisterUtils::IntegerWidth(*returnType);
+            const auto width = returnType->IsBoolean() ? 8U : IntegerUtil::IntegerWidth(*returnType);
             if (width) {
-                RegisterUtils::NormalizeInteger(assembler, x86::rax, width, returnType->IsSignedInteger());
+                IntegerUtil::NormalizeInteger(assembler, x86::rax, width, returnType->IsSignedInteger());
             }
             MemoryUtils::StoreValue(context, expression.GetResult(), x86::rax);
         }

@@ -22,6 +22,7 @@
 #include "../Expression/CompileObject.h"
 #include "../Context/FunctionContext.h"
 #include "../../Utils/MemoryUtils.h"
+#include "../../Utils/IntegerUtil.h"
 #include "../../Utils/RegisterUtils.h"
 #include "../../Utils/StackFrameUtils.h"
 #include "cangjie/Basic/UGTypeKind.h"
@@ -54,7 +55,7 @@ unsigned ScalarWidth(const CHIR::Type* type)
     if (type->GetTypeKind() == CHIR::Type::TYPE_FLOAT64) {
         return 64;
     }
-    return type->IsBoolean() ? 8 : IsLocalClassReference(type) ? 64 : RegisterUtils::IntegerWidth(*type);
+    return type->IsBoolean() ? 8 : IsLocalClassReference(type) ? 64 : IntegerUtil::IntegerWidth(*type);
 }
 
 bool MatchesReference(const CHIR::Value* reference, const CHIR::Type* type)
@@ -116,7 +117,7 @@ void CompileLoad(FunctionContext& context, const CHIR::Load& expression)
         case 64: a.mov(asmjit::x86::rax, asmjit::x86::qword_ptr(asmjit::x86::rcx)); break;
         default: context.Fail(JitFailureKind::UnsupportedMemoryAccess); return;
     }
-    RegisterUtils::NormalizeInteger(a, asmjit::x86::rax, width, type->IsSignedInteger());
+    IntegerUtil::NormalizeInteger(a, asmjit::x86::rax, width, type->IsSignedInteger());
     MemoryUtils::StoreValue(context, result, asmjit::x86::rax);
 }
 

@@ -9,6 +9,7 @@
 #include "CompileBinaryExpression.h"
 
 #include "../../Utils/MemoryUtils.h"
+#include "../../Utils/IntegerUtil.h"
 #include "../../Utils/RegisterUtils.h"
 #include "../Context/FunctionContext.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
@@ -38,8 +39,8 @@ void CompileNumericCast::Compile(FunctionContext& context, const CHIR::NumericCa
             targetKind == CHIR::Type::TYPE_FLOAT64, normal);
         return;
     }
-    const auto sourceWidth = RegisterUtils::IntegerWidth(*sourceType);
-    const auto targetWidth = RegisterUtils::IntegerWidth(*targetType);
+    const auto sourceWidth = IntegerUtil::IntegerWidth(*sourceType);
+    const auto targetWidth = IntegerUtil::IntegerWidth(*targetType);
     if (!sourceWidth || !targetWidth) {
         context.Fail(JitFailureKind::UnsupportedNumericCast);
         return;
@@ -58,7 +59,7 @@ void CompileNumericCast::Compile(FunctionContext& context, const CHIR::NumericCa
         return;
     }
     auto& assembler = context.GetAssembler();
-    RegisterUtils::NormalizeInteger(assembler, asmjit::x86::rax, sourceWidth, sourceSigned);
+    IntegerUtil::NormalizeInteger(assembler, asmjit::x86::rax, sourceWidth, sourceSigned);
     if (!alwaysFits && (overflow == OverflowStrategy::SATURATING || overflow == OverflowStrategy::THROWING)) {
         const uint64_t targetSignBit = uint64_t{1} << (targetWidth - 1);
         const uint64_t lower = targetSigned ? ~(targetSignBit - 1) : 0;
@@ -99,7 +100,7 @@ void CompileNumericCast::Compile(FunctionContext& context, const CHIR::NumericCa
         }
         assembler.bind(done);
     }
-    RegisterUtils::NormalizeInteger(assembler, asmjit::x86::rax, targetWidth, targetSigned);
+    IntegerUtil::NormalizeInteger(assembler, asmjit::x86::rax, targetWidth, targetSigned);
     MemoryUtils::StoreValue(context, result, asmjit::x86::rax);
     if (normal && !context.GetFailure()) {
         assembler.jmp(context.GetLocalFinalizers().GetEdgeLabel(normal));

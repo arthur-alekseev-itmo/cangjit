@@ -5,6 +5,7 @@
 #include "CompileBinaryExpression.h"
 
 #include "../../Utils/MemoryUtils.h"
+#include "../../Utils/IntegerUtil.h"
 #include "../../Utils/RegisterUtils.h"
 #include "../Context/GlobalContext.h"
 #include "../Context/FunctionContext.h"
@@ -49,7 +50,7 @@ void CheckedArithmetic(Cangjie::JIT::X86_64::FunctionContext& ctx,
             }
         } else {
             a.mov(rdx, rax);
-            Cangjie::JIT::X86_64::RegisterUtils::NormalizeInteger(a, rdx, width, isSigned);
+            Cangjie::JIT::X86_64::IntegerUtil::NormalizeInteger(a, rdx, width, isSigned);
             a.cmp(rax, rdx);
             a.jne(overflow);
         }
@@ -204,8 +205,8 @@ void CompileBinaryExpression::Compile(FunctionContext& ctx, const CHIR::BinaryEx
     }
     const auto* type = lhs->GetType();
     const auto kind = expr.GetOpKind();
-    const auto width = RegisterUtils::IntegerWidth(*type);
-    const auto rhsWidth = RegisterUtils::IntegerWidth(*rhs->GetType());
+    const auto width = IntegerUtil::IntegerWidth(*type);
+    const auto rhsWidth = IntegerUtil::IntegerWidth(*rhs->GetType());
     const bool shift = kind == K::LSHIFT || kind == K::RSHIFT;
     const bool boolean = type->IsBoolean();
     const bool comparison = kind >= K::LT && kind <= K::NOTEQUAL;
@@ -244,8 +245,8 @@ void CompileBinaryExpression::Compile(FunctionContext& ctx, const CHIR::BinaryEx
     }
     auto& a = ctx.GetAssembler();
     if (width) {
-        RegisterUtils::NormalizeInteger(a, asmjit::x86::rax, width, type->IsSignedInteger());
-        RegisterUtils::NormalizeInteger(a, asmjit::x86::rcx, shift ? rhsWidth : width,
+        IntegerUtil::NormalizeInteger(a, asmjit::x86::rax, width, type->IsSignedInteger());
+        IntegerUtil::NormalizeInteger(a, asmjit::x86::rcx, shift ? rhsWidth : width,
             shift || type->IsSignedInteger());
     }
     switch (kind) {
@@ -340,7 +341,7 @@ void CompileBinaryExpression::Compile(FunctionContext& ctx, const CHIR::BinaryEx
             break;
     }
     if (width && !comparison) {
-        RegisterUtils::NormalizeInteger(a, asmjit::x86::rax, width, type->IsSignedInteger());
+        IntegerUtil::NormalizeInteger(a, asmjit::x86::rax, width, type->IsSignedInteger());
     }
     MemoryUtils::StoreValue(ctx, result, asmjit::x86::rax);
     if (normal && !ctx.GetFailure()) {

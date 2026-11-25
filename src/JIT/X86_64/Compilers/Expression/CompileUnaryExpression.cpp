@@ -7,6 +7,7 @@
 #include "CompileBinaryExpression.h"
 
 #include "../../Utils/MemoryUtils.h"
+#include "../../Utils/IntegerUtil.h"
 #include "../../Utils/RegisterUtils.h"
 #include "../Context/FunctionContext.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
@@ -27,7 +28,7 @@ void CompileUnaryExpression::Compile(FunctionContext& ctx, const CHIR::UnaryExpr
         return;
     }
     const auto* type = operand->GetType();
-    const auto width = RegisterUtils::IntegerWidth(*type);
+    const auto width = IntegerUtil::IntegerWidth(*type);
     const auto kind = expr.GetOpKind();
     const bool floating = type->GetTypeKind() == CHIR::Type::TYPE_FLOAT32 ||
         type->GetTypeKind() == CHIR::Type::TYPE_FLOAT64;
@@ -66,7 +67,7 @@ void CompileUnaryExpression::Compile(FunctionContext& ctx, const CHIR::UnaryExpr
     switch (kind) {
         case K::NEG:
             if (expr.GetOverflowStrategy() == OverflowStrategy::THROWING) {
-                RegisterUtils::NormalizeInteger(a, asmjit::x86::rax, width, type->IsSignedInteger());
+                IntegerUtil::NormalizeInteger(a, asmjit::x86::rax, width, type->IsSignedInteger());
                 auto ordinary = a.newLabel();
                 if (type->IsSignedInteger()) {
                     const uint64_t minimum = uint64_t{1} << (width - 1);
@@ -84,7 +85,7 @@ void CompileUnaryExpression::Compile(FunctionContext& ctx, const CHIR::UnaryExpr
                 if (!type->IsSignedInteger()) {
                     a.xor_(asmjit::x86::rax, asmjit::x86::rax);
                 } else {
-                    RegisterUtils::NormalizeInteger(a, asmjit::x86::rax, width, true);
+                    IntegerUtil::NormalizeInteger(a, asmjit::x86::rax, width, true);
                     const uint64_t minimum = uint64_t{1} << (width - 1);
                     const uint64_t signExtendedMinimum = width == 64 ? minimum : ~(minimum - 1);
                     auto ordinary = a.newLabel();
@@ -107,7 +108,7 @@ void CompileUnaryExpression::Compile(FunctionContext& ctx, const CHIR::UnaryExpr
         default: ctx.Fail(JitFailureKind::UnsupportedUnaryOperation); return;
     }
     if (width) {
-        RegisterUtils::NormalizeInteger(a, asmjit::x86::rax, width, type->IsSignedInteger());
+        IntegerUtil::NormalizeInteger(a, asmjit::x86::rax, width, type->IsSignedInteger());
     }
     MemoryUtils::StoreValue(ctx, result, asmjit::x86::rax);
     if (normal && !ctx.GetFailure()) {

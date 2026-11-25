@@ -15,6 +15,7 @@
 #include "../../RegisterAllocation/ValueNumeration.h"
 #include "../../Utils/SystemVCallingConvention.h"
 #include "../../Utils/MemoryUtils.h"
+#include "../../Utils/IntegerUtil.h"
 #include "../../Utils/RegisterUtils.h"
 #include "../../Utils/StackFrameUtils.h"
 #include "CompileBlock.h"
@@ -179,7 +180,7 @@ bool CompileFunction::SaveReturnValue(FunctionContext& context) const
         return true;
     }
     const auto kind = type->GetTypeKind();
-    const auto width = type->IsBoolean() ? 8U : RegisterUtils::IntegerWidth(*type);
+    const auto width = type->IsBoolean() ? 8U : IntegerUtil::IntegerWidth(*type);
     const bool pointer = type->IsRef() || type->IsCPointer() || type->IsCString();
     if (!width && !pointer && kind != CHIR::Type::TYPE_FLOAT32 && kind != CHIR::Type::TYPE_FLOAT64) {
         context.Fail(JitFailureKind::UnsupportedReturnType);
@@ -203,13 +204,13 @@ void CompileFunction::LoadReturnValueFromAddress(
         assembler.movsd(asmjit::x86::xmm0, asmjit::x86::qword_ptr(asmjit::x86::rax));
     } else if (width == 8) {
         assembler.movzx(asmjit::x86::eax, asmjit::x86::byte_ptr(asmjit::x86::rax));
-        RegisterUtils::NormalizeInteger(assembler, asmjit::x86::rax, width, type.IsSignedInteger());
+        IntegerUtil::NormalizeInteger(assembler, asmjit::x86::rax, width, type.IsSignedInteger());
     } else if (width == 16) {
         assembler.movzx(asmjit::x86::eax, asmjit::x86::word_ptr(asmjit::x86::rax));
-        RegisterUtils::NormalizeInteger(assembler, asmjit::x86::rax, width, type.IsSignedInteger());
+        IntegerUtil::NormalizeInteger(assembler, asmjit::x86::rax, width, type.IsSignedInteger());
     } else if (width == 32) {
         assembler.mov(asmjit::x86::eax, asmjit::x86::dword_ptr(asmjit::x86::rax));
-        RegisterUtils::NormalizeInteger(assembler, asmjit::x86::rax, width, type.IsSignedInteger());
+        IntegerUtil::NormalizeInteger(assembler, asmjit::x86::rax, width, type.IsSignedInteger());
     } else {
         assembler.mov(asmjit::x86::rax, asmjit::x86::qword_ptr(asmjit::x86::rax));
     }
@@ -264,7 +265,7 @@ bool CompileFunction::SaveParameter(FunctionContext& context, const ParameterPla
     }
     const auto* type = parameter->GetType();
     const bool pointer = type->IsRef() || type->IsCPointer() || type->IsCString();
-    const auto width = pointer ? 64U : type->IsBoolean() ? 8U : RegisterUtils::IntegerWidth(*type);
+    const auto width = pointer ? 64U : type->IsBoolean() ? 8U : IntegerUtil::IntegerWidth(*type);
     const bool floating = type->GetTypeKind() == CHIR::Type::TYPE_FLOAT32 ||
         type->GetTypeKind() == CHIR::Type::TYPE_FLOAT64;
     const auto location = placements.locations.find(parameter);
@@ -304,7 +305,7 @@ bool CompileFunction::SaveParameter(FunctionContext& context, const ParameterPla
         return false;
     }
     if (width) {
-        RegisterUtils::NormalizeInteger(assembler, asmjit::x86::rax, width, type->IsSignedInteger());
+        IntegerUtil::NormalizeInteger(assembler, asmjit::x86::rax, width, type->IsSignedInteger());
     }
     return MemoryUtils::StoreValue(context, parameter, asmjit::x86::rax);
 }
