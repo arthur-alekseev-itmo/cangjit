@@ -81,33 +81,33 @@ bool SupportedSignature(const CHIR::Function& function, std::vector<int32_t>& gc
         return false;
     }
     const auto placement = SystemVCallingConvention::GetNativeParameterPlacement(function);
-    if (!placement || !placement->basePointerLocations.empty() ||
-        (placement->indirectReturn && !placement->abiReturnType->IsUnit() &&
-            !placement->abiReturnType->IsNothing())) {
+    if (!placement.basePointerLocations.empty() ||
+        (placement.indirectReturn && !placement.abiReturnType->IsUnit() &&
+            !placement.abiReturnType->IsNothing())) {
         return false;
     }
     const auto supported = [](const CHIR::Type& type) {
         return type.IsInteger() || type.IsBoolean() || TypeUtils::IsFloating(type) ||
             IsObjectReference(type);
     };
-    const auto* result = placement->abiReturnType;
+    const auto* result = placement.abiReturnType;
     if (!result || (!result->IsVoid() && !result->IsUnit() && !result->IsNothing() && !supported(*result))) {
         return false;
     }
-    if (placement->indirectReturn) {
-        const auto* reg = placement->sretLocation ? placement->sretLocation->AsGpRegister() : nullptr;
+    if (placement.indirectReturn) {
+        const auto* reg = placement.sretLocation ? placement.sretLocation->AsGpRegister() : nullptr;
         if (!reg || reg->type != GPRegisterType::RDI || reg->index != 0) {
             return false;
         }
         stackSlots.push_back(-16);
     }
     for (const auto* parameter : function.GetParams()) {
-        const auto type = placement->abiParameterTypes.find(parameter);
-        const auto location = placement->locations.find(parameter);
-        CJC_ASSERT(type != placement->abiParameterTypes.end());
-        CJC_ASSERT(location != placement->locations.end());
-        if (!parameter || type == placement->abiParameterTypes.end() || !type->second ||
-            location == placement->locations.end() || !supported(*type->second)) {
+        const auto type = placement.abiParameterTypes.find(parameter);
+        const auto location = placement.locations.find(parameter);
+        CJC_ASSERT(type != placement.abiParameterTypes.end());
+        CJC_ASSERT(location != placement.locations.end());
+        if (!parameter || type == placement.abiParameterTypes.end() || !type->second ||
+            location == placement.locations.end() || !supported(*type->second)) {
             return false;
         }
         if (!IsObjectReference(*type->second)) {

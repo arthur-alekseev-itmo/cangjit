@@ -111,10 +111,7 @@ bool PlaceArguments(FunctionContext& context, const CHIR::ApplyBase& expression,
     const ParameterPlacement& placement, uint32_t& scratchSize)
 {
     const auto& typeArgs = expression.GetInstantiatedTypeArgs();
-    if (typeArgs.size() != placement.genericTypeInfoLocations.size()) {
-        context.Fail(JitFailureKind::UnsupportedCallingConvention);
-        return false;
-    }
+    CJC_ASSERT(typeArgs.size() == placement.genericTypeInfoLocations.size());
     const auto* outer = placement.outerTypeInfoLocation
         ? expression.GetInstParentCustomTyOfCallee(context.GetGlobalContext().GetCHIRBuilder()) : nullptr;
     const auto* thisType = placement.thisTypeInfoLocation ? expression.GetThisType() : nullptr;
@@ -257,21 +254,15 @@ void CompileCall(FunctionContext& context, const CHIR::ApplyBase& expression,
         return;
     }
     const auto placements = SystemVCallingConvention::GetNativeParameterPlacement(*callee);
-    if (!placements || !placements->basePointerLocations.empty() ||
-        (placements->indirectReturn && !placements->abiReturnType->IsUnit() &&
-            !placements->abiReturnType->IsNothing())) {
-        context.Fail(JitFailureKind::UnsupportedCallingConvention);
-        return;
-    }
     if (!ValidateArguments(context, expression, *callee)) {
         return;
     }
     const CodeAddress target = ResolveAddress(context, *callee);
     uint32_t scratchSize = 0;
-    if (!target || !PlaceArguments(context, expression, *callee, *placements, scratchSize)) {
+    if (!target || !PlaceArguments(context, expression, *callee, placements, scratchSize)) {
         return;
     }
-    EmitCall(context, expression, *callee, target, placements->stackSize + scratchSize, normal, unwind);
+    EmitCall(context, expression, *callee, target, placements.stackSize + scratchSize, normal, unwind);
 }
 } // namespace
 

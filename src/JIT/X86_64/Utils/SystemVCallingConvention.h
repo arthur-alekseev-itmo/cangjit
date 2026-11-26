@@ -42,11 +42,9 @@ class SystemVCallingConvention final {
 public:
     SystemVCallingConvention() = delete;
     // Native function entry ABI, including supplementary operands; not the
-    // separate with-TypeInfo-wrapper ABI. Override types must have the same
-    // representation as the body signature.
-    static std::optional<ParameterPlacement> GetNativeParameterPlacement(
-        const CHIR::Function& function);
-    static std::optional<ParameterPlacement> GetVirtualParameterPlacement(
+    // separate with-TypeInfo-wrapper ABI.
+    static ParameterPlacement GetNativeParameterPlacement(const CHIR::Function& function);
+    static ParameterPlacement GetVirtualParameterPlacement(
         const CHIR::DynamicDispatch& expression, bool isStatic);
 };
 } // namespace Cangjie::JIT::X86_64

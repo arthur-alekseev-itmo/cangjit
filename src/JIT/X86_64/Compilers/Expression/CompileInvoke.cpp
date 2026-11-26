@@ -142,22 +142,25 @@ void CompileCall(FunctionContext& context, const CHIR::DynamicDispatch& expressi
     const auto* callee = expression.GetCallee();
     const auto* returnType = expression.GetMethodType() ? expression.GetMethodType()->GetReturnType() : nullptr;
     const auto* result = expression.GetResult();
-    auto placement = SystemVCallingConvention::GetVirtualParameterPlacement(expression, isStatic);
-    if (!callee || !returnType || !result || !result->GetType() || !placement ||
-        !placement->basePointerLocations.empty() ||
-        (placement->indirectReturn && !returnType->IsUnit() && !returnType->IsNothing())) {
+    if (!callee || !returnType || !result || !result->GetType()) {
+        context.Fail(JitFailureKind::UnsupportedCallingConvention, expression.GetExprKind());
+        return;
+    }
+    const auto placement = SystemVCallingConvention::GetVirtualParameterPlacement(expression, isStatic);
+    if (!placement.basePointerLocations.empty() ||
+        (placement.indirectReturn && !returnType->IsUnit() && !returnType->IsNothing())) {
         context.Fail(JitFailureKind::UnsupportedCallingConvention, expression.GetExprKind());
         return;
     }
     const auto args = expression.GetArgs();
     const auto& parameters = callee->GetParams();
     if (args.size() != parameters.size() ||
-        placement->stackSize > static_cast<uint32_t>(std::numeric_limits<int32_t>::max() - 48)) {
+        placement.stackSize > static_cast<uint32_t>(std::numeric_limits<int32_t>::max() - 48)) {
         context.Fail(JitFailureKind::UnsupportedCall, expression.GetExprKind());
         return;
     }
     const auto& typeArgs = expression.GetInstantiatedTypeArgs();
-    if (typeArgs.size() != placement->genericTypeInfoLocations.size()) {
+    if (typeArgs.size() != placement.genericTypeInfoLocations.size()) {
         context.Fail(JitFailureKind::UnsupportedCallingConvention, expression.GetExprKind());
         return;
     }
@@ -175,30 +178,30 @@ void CompileCall(FunctionContext& context, const CHIR::DynamicDispatch& expressi
         const std::vector<const CHIR::Type*> types(typeArgs.begin(), typeArgs.end());
         const auto size = MemoryUtils::StageTypeInfos(context, types);
         if (!size || *size > static_cast<uint32_t>(std::numeric_limits<int32_t>::max()) -
-                placement->stackSize - SCRATCH_SIZE) {
+                placement.stackSize - SCRATCH_SIZE) {
             context.Fail(JitFailureKind::UnsupportedCallingConvention, expression.GetExprKind());
             return;
         }
         typeScratchSize = *size;
     }
-    MemoryUtils::ReserveStack(context, placement->stackSize);
+    MemoryUtils::ReserveStack(context, placement.stackSize);
     for (size_t i = 0; i < args.size(); ++i) {
-        const auto it = placement->locations.find(parameters[i]);
-        CJC_ASSERT(it != placement->locations.end());
-        if (it == placement->locations.end() || !args[i] || !args[i]->GetType()) {
+        const auto it = placement.locations.find(parameters[i]);
+        CJC_ASSERT(it != placement.locations.end());
+        if (it == placement.locations.end() || !args[i] || !args[i]->GetType()) {
             context.Fail(JitFailureKind::UnsupportedCall, expression.GetExprKind());
             return;
         }
         if (const auto* stack = it->second.AsIncomingStack()) {
-            if (!MemoryUtils::StoreOutgoingArgument(context, args[i], stack->index, placement->stackSize)) {
+            if (!MemoryUtils::StoreOutgoingArgument(context, args[i], stack->index, placement.stackSize)) {
                 return;
             }
         }
     }
     for (size_t i = 0; i < args.size(); ++i) {
-        const auto it = placement->locations.find(parameters[i]);
-        CJC_ASSERT(it != placement->locations.end());
-        if (it == placement->locations.end()) {
+        const auto it = placement.locations.find(parameters[i]);
+        CJC_ASSERT(it != placement.locations.end());
+        if (it == placement.locations.end()) {
             context.Fail(JitFailureKind::UnsupportedCall, expression.GetExprKind());
             return;
         }
@@ -219,24 +222,24 @@ void CompileCall(FunctionContext& context, const CHIR::DynamicDispatch& expressi
     }
     for (size_t i = 0; i < typeArgs.size(); ++i) {
         const bool placed = needsTypeScratch
-            ? MemoryUtils::PlaceStagedTypeInfo(context, placement->genericTypeInfoLocations[i], placement->stackSize,
-                static_cast<int32_t>(placement->stackSize + i * sizeof(uint64_t)))
-            : MemoryUtils::PlaceTypeInfo(context, typeArgs[i], placement->genericTypeInfoLocations[i],
-                placement->stackSize);
+            ? MemoryUtils::PlaceStagedTypeInfo(context, placement.genericTypeInfoLocations[i], placement.stackSize,
+                static_cast<int32_t>(placement.stackSize + i * sizeof(uint64_t)))
+            : MemoryUtils::PlaceTypeInfo(context, typeArgs[i], placement.genericTypeInfoLocations[i],
+                placement.stackSize);
         if (!placed) {
             return;
         }
     }
-    const auto scratch = static_cast<int32_t>(placement->stackSize + typeScratchSize);
-    if (placement->outerTypeInfoLocation &&
-        !MemoryUtils::PlaceStagedTypeInfo(context, *placement->outerTypeInfoLocation, placement->stackSize, scratch + 8)) {
+    const auto scratch = static_cast<int32_t>(placement.stackSize + typeScratchSize);
+    if (placement.outerTypeInfoLocation &&
+        !MemoryUtils::PlaceStagedTypeInfo(context, *placement.outerTypeInfoLocation, placement.stackSize, scratch + 8)) {
         return;
     }
-    if (placement->thisTypeInfoLocation &&
-        !MemoryUtils::PlaceStagedTypeInfo(context, *placement->thisTypeInfoLocation, placement->stackSize, scratch + 16)) {
+    if (placement.thisTypeInfoLocation &&
+        !MemoryUtils::PlaceStagedTypeInfo(context, *placement.thisTypeInfoLocation, placement.stackSize, scratch + 16)) {
         return;
     }
-    if (placement->indirectReturn && !MemoryUtils::ZeroStackValueAndLoadAddress(context, result, x86::rdi)) {
+    if (placement.indirectReturn && !MemoryUtils::ZeroStackValueAndLoadAddress(context, result, x86::rdi)) {
         return;
     }
     a.mov(x86::r11, x86::qword_ptr(x86::rsp, scratch));
@@ -246,7 +249,7 @@ void CompileCall(FunctionContext& context, const CHIR::DynamicDispatch& expressi
     if (!context.GetSafepointRecorder().Record(expression)) {
         return;
     }
-    MemoryUtils::ReleaseStack(context, placement->stackSize + typeScratchSize + SCRATCH_SIZE);
+    MemoryUtils::ReleaseStack(context, placement.stackSize + typeScratchSize + SCRATCH_SIZE);
     if (!returnType->IsUnit() && !returnType->IsNothing() && !returnType->IsVoid()) {
         if (TypeUtils::IsFloating(*returnType)) {
             if (!MemoryUtils::StoreFloatValue(context, result, x86::xmm0, x86::rax)) {

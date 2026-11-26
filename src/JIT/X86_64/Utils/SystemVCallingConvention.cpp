@@ -14,7 +14,6 @@
 #include "cangjie/CHIR/IR/Annotation.h"
 #include "cangjie/CHIR/IR/Type/Type.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
-#include "cangjie/Utils/CheckUtils.h"
 
 namespace Cangjie::JIT::X86_64 {
 namespace {
@@ -23,40 +22,17 @@ constexpr std::array<GPRegisterType, 6> INTEGER_REGISTERS = {GPRegisterType::RDI
     GPRegisterType::RDX, GPRegisterType::RCX, GPRegisterType::R8, GPRegisterType::R9};
 constexpr size_t SIMD_REGISTER_COUNT = 8;
 
-enum class ArgumentClass { INTEGER, SIMD, UNSUPPORTED };
+enum class ArgumentClass { INTEGER, SIMD };
 
 ArgumentClass Classify(const Type& type, bool isC)
 {
     switch (type.GetTypeKind()) {
-        case Type::TYPE_INT8: case Type::TYPE_INT16: case Type::TYPE_INT32: case Type::TYPE_INT64:
-        case Type::TYPE_INT_NATIVE: case Type::TYPE_UINT8: case Type::TYPE_UINT16: case Type::TYPE_UINT32:
-        case Type::TYPE_UINT64: case Type::TYPE_UINT_NATIVE: case Type::TYPE_BOOLEAN:
-        case Type::TYPE_CPOINTER: case Type::TYPE_CSTRING:
-            return ArgumentClass::INTEGER;
-        case Type::TYPE_RUNE:
-            return isC ? ArgumentClass::UNSUPPORTED : ArgumentClass::INTEGER;
-        case Type::TYPE_FUNC:
-            return !isC || type.IsCFunc() ? ArgumentClass::INTEGER : ArgumentClass::UNSUPPORTED;
-        case Type::TYPE_GENERIC:
-            return isC ? ArgumentClass::UNSUPPORTED : ArgumentClass::INTEGER;
-        case Type::TYPE_BOXTYPE:
-            return isC ? ArgumentClass::UNSUPPORTED : ArgumentClass::INTEGER;
-        case Type::TYPE_STRUCT: case Type::TYPE_TUPLE: case Type::TYPE_VARRAY:
-        case Type::TYPE_UNIT: case Type::TYPE_NOTHING:
-            return isC ? ArgumentClass::UNSUPPORTED : ArgumentClass::INTEGER;
-        case Type::TYPE_REFTYPE: {
-            const auto& args = type.GetTypeArgs();
-            if (isC || args.empty() || !args[0]) {
-                return ArgumentClass::UNSUPPORTED;
-            }
-            return ArgumentClass::INTEGER;
-        }
         case Type::TYPE_FLOAT16:
-            return isC ? ArgumentClass::UNSUPPORTED : ArgumentClass::SIMD;
+            return isC ? ArgumentClass::INTEGER : ArgumentClass::SIMD;
         case Type::TYPE_FLOAT32: case Type::TYPE_FLOAT64:
             return ArgumentClass::SIMD;
         default:
-            return ArgumentClass::UNSUPPORTED;
+            return ArgumentClass::INTEGER;
     }
 }
 
@@ -75,61 +51,25 @@ OperandWidth Width(const Type& type)
     }
 }
 
-std::optional<bool> HasIndirectReturn(const Type& type, bool isC)
+bool HasIndirectReturn(const Type& type, bool isC)
 {
     switch (type.GetTypeKind()) {
         case Type::TYPE_UNIT: case Type::TYPE_NOTHING:
             return !isC;
-        case Type::TYPE_GENERIC:
-            return isC ? std::nullopt : std::optional<bool>(true);
-        case Type::TYPE_STRUCT: case Type::TYPE_TUPLE: case Type::TYPE_VARRAY:
-            return isC ? std::nullopt : std::optional<bool>(true);
-        case Type::TYPE_VOID:
-            return false;
+        case Type::TYPE_GENERIC: case Type::TYPE_STRUCT: case Type::TYPE_TUPLE: case Type::TYPE_VARRAY:
+            return !isC;
         default:
-            if (Classify(type, isC) != ArgumentClass::UNSUPPORTED) {
-                return false;
-            }
-            return std::nullopt;
+            return false;
     }
 }
 
-bool SameRepresentation(const Type& actual, const Type& abi)
-{
-    if (&actual == &abi) {
-        return true;
-    }
-    if (actual.IsRef() && abi.IsRef()) {
-        const auto* actualBase = static_cast<const CHIR::RefType&>(actual).GetBaseType();
-        const auto* abiBase = static_cast<const CHIR::RefType&>(abi).GetBaseType();
-        return actualBase && actualBase->IsClass() && abiBase && abiBase->IsClass();
-    }
-    return actual.GetTypeKind() == abi.GetTypeKind() &&
-        (actual.IsPrimitive() || actual.IsVoid() || actual.IsCPointer() || actual.IsCString());
-}
-
-std::optional<ParameterPlacement> ComputePlacement(const CHIR::Function& function,
+ParameterPlacement ComputePlacement(const CHIR::Function& function,
     const CHIR::FuncType* functionType, size_t genericCount, bool isStatic, bool allowBasePointer)
 {
-    const auto* bodyType = function.GetFuncType();
-    if (!functionType || functionType->HasVarArg() || !functionType->GetReturnType()) {
-        return std::nullopt;
-    }
     const bool isC = functionType->IsCFunc();
     const auto* returnType = functionType->GetReturnType();
     const auto parameterTypes = functionType->GetParamTypes();
     const auto& parameters = function.GetParams();
-    if (!bodyType || !bodyType->GetReturnType() ||
-        !SameRepresentation(*bodyType->GetReturnType(), *returnType)) {
-        return std::nullopt;
-    }
-    if (parameterTypes.size() != parameters.size()) {
-        return std::nullopt;
-    }
-    const auto indirectReturn = HasIndirectReturn(*returnType, isC);
-    if (!indirectReturn) {
-        return std::nullopt;
-    }
     size_t integerIndex = 0;
     size_t simdIndex = 0;
     size_t stackIndex = 0;
@@ -142,8 +82,8 @@ std::optional<ParameterPlacement> ComputePlacement(const CHIR::Function& functio
     };
     ParameterPlacement placement;
     placement.abiReturnType = returnType;
-    placement.indirectReturn = *indirectReturn;
-    if (*indirectReturn) {
+    placement.indirectReturn = HasIndirectReturn(*returnType, isC);
+    if (placement.indirectReturn) {
         placement.sretLocation = nextInteger(OperandWidth::QWORD);
     } else if (!returnType->IsVoid() && !(isC && (returnType->IsUnit() || returnType->IsNothing()))) {
         if (Classify(*returnType, isC) == ArgumentClass::SIMD) {
@@ -157,30 +97,13 @@ std::optional<ParameterPlacement> ComputePlacement(const CHIR::Function& functio
     for (size_t i = 0; i < parameters.size(); ++i) {
         const auto* parameter = parameters[i];
         const auto* type = parameterTypes[i];
-        if (!parameter || !parameter->GetType() || !type ||
-            !placement.abiParameterTypes.emplace(parameter, type).second) {
-            return std::nullopt;
-        }
-        if (!SameRepresentation(*parameter->GetType(), *type)) {
-            return std::nullopt;
-        }
-        switch (Classify(*type, isC)) {
-            case ArgumentClass::INTEGER:
-                if (!placement.locations.emplace(parameter, nextInteger(Width(*type))).second) {
-                    return std::nullopt;
-                }
-                break;
-            case ArgumentClass::SIMD: {
-                const auto location = simdIndex < SIMD_REGISTER_COUNT
-                    ? Location::SimdRegister(simdIndex++, Width(*type)) : Location::IncomingStack(stackIndex++);
-                if (!placement.locations.emplace(parameter, location).second) {
-                    return std::nullopt;
-                }
-                break;
-            }
-            case ArgumentClass::UNSUPPORTED:
-            default:
-                return std::nullopt;
+        placement.abiParameterTypes.emplace(parameter, type);
+        if (Classify(*type, isC) == ArgumentClass::SIMD) {
+            const auto location = simdIndex < SIMD_REGISTER_COUNT
+                ? Location::SimdRegister(simdIndex++, Width(*type)) : Location::IncomingStack(stackIndex++);
+            placement.locations.emplace(parameter, location);
+        } else {
+            placement.locations.emplace(parameter, nextInteger(Width(*type)));
         }
         if (!isC && allowBasePointer && type->IsRef()) {
             const auto& args = type->GetTypeArgs();
@@ -201,35 +124,24 @@ std::optional<ParameterPlacement> ComputePlacement(const CHIR::Function& functio
             placement.thisTypeInfoLocation = nextInteger(OperandWidth::QWORD);
         }
     }
-    const auto stackSize = StackFrameUtils::GetFrameSize(stackIndex);
-    if (!stackSize) {
-        return std::nullopt;
-    }
-    placement.stackSize = *stackSize;
+    placement.stackSize = *StackFrameUtils::GetFrameSize(stackIndex);
     return placement;
 }
 } // namespace
 
-std::optional<ParameterPlacement> SystemVCallingConvention::GetNativeParameterPlacement(const CHIR::Function& function)
+ParameterPlacement SystemVCallingConvention::GetNativeParameterPlacement(const CHIR::Function& function)
 {
     const auto* overrideType = function.Get<CHIR::OverrideSrcFuncType>();
     const auto* functionType = overrideType ? overrideType : function.GetFuncType();
     const auto& generics = function.GetGenericTypeParams();
-    for (const auto* generic : generics) {
-        CJC_ASSERT(generic);
-    }
     return ComputePlacement(function, functionType, generics.size(), function.TestAttr(CHIR::Attribute::STATIC), true);
 }
 
-std::optional<ParameterPlacement> SystemVCallingConvention::GetVirtualParameterPlacement(
+ParameterPlacement SystemVCallingConvention::GetVirtualParameterPlacement(
     const CHIR::DynamicDispatch& expression, bool isStatic)
 {
-    const auto* callee = expression.GetCallee();
-    if (!callee) {
-        return std::nullopt;
-    }
-    return ComputePlacement(*callee, expression.GetMethodType(), expression.GetInstantiatedTypeArgs().size(),
-        isStatic, !isStatic);
+    return ComputePlacement(*expression.GetCallee(), expression.GetMethodType(),
+        expression.GetInstantiatedTypeArgs().size(), isStatic, !isStatic);
 }
 
 } // namespace Cangjie::JIT::X86_64

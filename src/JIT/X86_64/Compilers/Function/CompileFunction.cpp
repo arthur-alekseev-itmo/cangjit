@@ -258,20 +258,16 @@ bool CompileFunction::SaveReturnValue(FunctionContext& context, const ParameterP
 void CompileFunction::Compile(FunctionContext& context) const
 {
     const auto placements = SystemVCallingConvention::GetNativeParameterPlacement(function);
-    if (!placements) {
-        context.Fail(JitFailureKind::UnsupportedCallingConvention);
-        return;
-    }
     // Runtime metadata discovery reads a relative descriptor pointer here.
     context.GetAssembler().embedUInt32(0);
     MakePrologue(context);
     if (context.GetFailure()) {
         return;
     }
-    if (!SaveParameters(context, *placements)) {
+    if (!SaveParameters(context, placements)) {
         return;
     }
-    if (!SaveHiddenTypeInfo(context, *placements)) {
+    if (!SaveHiddenTypeInfo(context, placements)) {
         return;
     }
     auto& assembler = context.GetAssembler();
@@ -282,7 +278,7 @@ void CompileFunction::Compile(FunctionContext& context) const
             return;
         }
     }
-    MakeEpilogue(context, *placements);
+    MakeEpilogue(context, placements);
 }
 
 bool CompileFunction::SaveParameters(FunctionContext& context, const ParameterPlacement& placements) const
