@@ -15,7 +15,7 @@
 #include <vector>
 
 #include "../Context/GlobalContext.h"
-#include "../../../Runtime/JitMetadataBuilder.h"
+#include "../../../Runtime/FunctionMetadata.h"
 #include "../../Utils/StackFrameUtils.h"
 #include "../../Utils/TypeUtils.h"
 #include "../../Utils/SystemVCallingConvention.h"
@@ -233,13 +233,13 @@ void* MakeResolverStub(GlobalContext& context, FunctionRecord& record, std::vect
         return nullptr;
     }
     const auto codeSize = static_cast<uint32_t>(assembler.offset() - 4);
-    JitMetadataBuilder metadata(context.IsStackGrowthEnabled());
+    FunctionMetadata metadata(context.IsStackGrowthEnabled());
     metadata.RecordFrame(192, {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX});
     if (!context.IsStackGrowthEnabled()) {
         stackSlots.clear();
     }
     metadata.RecordSafepoint(safepoint, 0, std::move(gcSlots), 0, std::move(stackSlots), 0, {});
-    auto provisional = metadata.Build(0x20000000, 0x10000000, codeSize);
+    auto provisional = metadata.Serialize(0x20000000, 0x10000000, codeSize);
     if (!provisional || assembler.align(AlignMode::kData, 4) != kErrorOk) {
         return nullptr;
     }
@@ -252,7 +252,7 @@ void* MakeResolverStub(GlobalContext& context, FunctionRecord& record, std::vect
         return nullptr;
     }
     const auto base = reinterpret_cast<CodeAddress>(allocation);
-    auto finalMetadata = metadata.Build(base + metadataOffset, base + 4, codeSize);
+    auto finalMetadata = metadata.Serialize(base + metadataOffset, base + 4, codeSize);
     JitAllocator::Span span;
     auto* allocator = runtime.allocator();
     if (!finalMetadata || finalMetadata.Value().descriptor.size() != provisional.Value().descriptor.size() ||

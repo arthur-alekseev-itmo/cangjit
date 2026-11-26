@@ -205,7 +205,7 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
         }
     }
 
-    JitMetadataBuilder::Roots gc{0, {}}, stack{0, {}};
+    FunctionMetadata::Roots gc{0, {}}, stack{0, {}};
     std::unordered_map<Id, std::vector<int32_t>> derived;
     std::unordered_set<Id> roots;
     std::string error;
@@ -332,7 +332,7 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
     };
     sortUnique(gc.slots);
     sortUnique(stack.slots);
-    JitMetadataBuilder::DerivedRoots perRoot;
+    FunctionMetadata::DerivedRoots perRoot;
     perRoot.reserve(gc.slots.size());
     for (auto slot : gc.slots) {
         auto it = std::find_if(roots.begin(), roots.end(), [&](Id id) { return offset(id) == slot; });

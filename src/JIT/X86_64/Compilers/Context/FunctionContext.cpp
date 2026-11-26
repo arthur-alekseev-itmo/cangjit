@@ -19,7 +19,7 @@ FunctionContext::FunctionContext(GlobalContext& globalContext, const CHIR::Funct
     ValueNumeration valueNumeration, Liveness liveness, RegisterAllocation registerAllocation) noexcept
     : globalContext(globalContext),
       error(asmjit::kErrorOk),
-      metadataBuilder(globalContext.IsStackGrowthEnabled()),
+      metadata(globalContext.IsStackGrowthEnabled()),
       function(function),
       valueNumeration(std::move(valueNumeration)),
       liveness(std::move(liveness)),
@@ -76,9 +76,9 @@ asmjit::x86::Assembler& FunctionContext::GetAssembler() noexcept
 {
     return assembler;
 }
-JitMetadataBuilder& FunctionContext::GetMetadataBuilder() noexcept
+FunctionMetadata& FunctionContext::GetMetadata() noexcept
 {
-    return metadataBuilder;
+    return metadata;
 }
 
 std::optional<int32_t> FunctionContext::GetHiddenTypeInfoOffset(size_t index) const noexcept

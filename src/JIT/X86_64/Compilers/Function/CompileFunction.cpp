@@ -134,11 +134,11 @@ bool CompileFunction::PrepareMetadata(FunctionContext& context, uint32_t codeSiz
     size_t& metadataOffset, size_t& metadataSize, CompilationError& error) const
 {
     auto& assembler = context.GetAssembler();
-    context.GetMetadataBuilder().RecordFrame(frameSize,
+    context.GetMetadata().RecordFrame(frameSize,
         {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX});
     constexpr uintptr_t PROVISIONAL_CODE = 0x10000000;
     constexpr uintptr_t PROVISIONAL_METADATA = 0x20000000;
-    auto provisional = context.GetMetadataBuilder().Build(PROVISIONAL_METADATA, PROVISIONAL_CODE, codeSize);
+    auto provisional = context.GetMetadata().Serialize(PROVISIONAL_METADATA, PROVISIONAL_CODE, codeSize);
     if (!provisional) {
         error = {provisional.Error()};
         return false;
@@ -168,7 +168,7 @@ CompilationResult CompileFunction::AllocateCode(FunctionContext& context) const
 bool CompileFunction::WriteMetadata(FunctionContext& context, CodeAddress base, uint32_t codeSize,
     size_t metadataOffset, size_t metadataSize, size_t& publishedMetadataSize, CompilationError& error) const
 {
-    auto metadata = context.GetMetadataBuilder().Build(base + metadataOffset, base + sizeof(uint32_t), codeSize);
+    auto metadata = context.GetMetadata().Serialize(base + metadataOffset, base + sizeof(uint32_t), codeSize);
     if (!metadata) {
         error = {metadata.Error()};
         return false;

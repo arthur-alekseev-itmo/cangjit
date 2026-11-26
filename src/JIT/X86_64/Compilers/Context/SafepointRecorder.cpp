@@ -56,12 +56,12 @@ bool SafepointRecorder::Record(const CHIR::Expression& expression, const CHIR::V
             roots.gcRoots.slots.begin(), roots.gcRoots.slots.end(), *rootOffset, std::greater<int32_t>());
         const auto index = position - roots.gcRoots.slots.begin();
         roots.gcRoots.slots.insert(position, *rootOffset);
-        roots.derivedRoots.insert(roots.derivedRoots.begin() + index, JitMetadataBuilder::Roots{});
+        roots.derivedRoots.insert(roots.derivedRoots.begin() + index, FunctionMetadata::Roots{});
     }
     if (!context.GetGlobalContext().IsStackGrowthEnabled()) {
         roots.stackRoots = {};
     }
-    context.GetMetadataBuilder().RecordSafepoint(static_cast<uint32_t>(offset - 4),
+    context.GetMetadata().RecordSafepoint(static_cast<uint32_t>(offset - 4),
         roots.gcRoots.registers, std::move(roots.gcRoots.slots),
         roots.stackRoots.registers, std::move(roots.stackRoots.slots), 0, std::move(roots.derivedRoots));
     return true;

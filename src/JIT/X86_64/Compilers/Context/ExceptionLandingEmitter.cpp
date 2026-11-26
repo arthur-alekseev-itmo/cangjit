@@ -75,7 +75,7 @@ bool ExceptionLandingEmitter::Emit(const CHIR::Block& block, size_t callStart, s
         context.Fail(JitFailureKind::StackFrameTooLarge);
         return false;
     }
-    auto& metadata = context.GetMetadataBuilder();
+    auto& metadata = context.GetMetadata();
     const auto landing = metadata.RecordLandingPad(static_cast<uint32_t>(landingOffset - 4), std::move(*types));
     metadata.RecordCallSite(static_cast<uint32_t>(callStart - 4), static_cast<uint32_t>(callEnd - callStart), landing);
     assembler.lea(asmjit::x86::rsp, asmjit::x86::ptr(asmjit::x86::rbp, -static_cast<int32_t>(*frameSize)));

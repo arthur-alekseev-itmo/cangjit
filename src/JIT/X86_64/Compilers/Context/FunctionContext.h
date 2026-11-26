@@ -17,7 +17,7 @@
 #include "LocalFinalizers.h"
 #include "SafepointRecorder.h"
 #include "TypeInfoEmitter.h"
-#include "../../../Runtime/JitMetadataBuilder.h"
+#include "../../../Runtime/FunctionMetadata.h"
 #include "../../LazyCalls/LazyCallSiteRegistry.h"
 #include "../../RegisterAllocation/Liveness.h"
 #include "../../RegisterAllocation/RegisterAllocation.h"
@@ -45,7 +45,7 @@ public:
     GlobalContext& GetGlobalContext() const noexcept;
     asmjit::CodeHolder& GetCode() noexcept;
     asmjit::x86::Assembler& GetAssembler() noexcept;
-    JitMetadataBuilder& GetMetadataBuilder() noexcept;
+    FunctionMetadata& GetMetadata() noexcept;
 
     std::optional<int32_t> GetHiddenTypeInfoOffset(size_t index) const noexcept;
     TypeInfoEmitter& GetTypeInfoEmitter() noexcept { return typeInfoEmitter; }
@@ -84,7 +84,7 @@ private:
     asmjit::CodeHolder code;
     asmjit::x86::Assembler assembler;
     asmjit::Error error;
-    JitMetadataBuilder metadataBuilder;
+    FunctionMetadata metadata;
     std::optional<JitFailure> failure;
     SafepointRecorder safepointRecorder{*this};
     ExceptionLandingEmitter exceptionLandingEmitter{*this};

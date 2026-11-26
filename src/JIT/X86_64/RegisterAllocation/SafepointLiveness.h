@@ -9,7 +9,7 @@
 
 #include <string>
 
-#include "../../Runtime/JitMetadataBuilder.h"
+#include "../../Runtime/FunctionMetadata.h"
 #include "../Types.h"
 #include "RegisterAllocation.h"
 
@@ -21,11 +21,11 @@ class Function;
 namespace Cangjie::JIT::X86_64 {
 class Liveness;
 // GC roots, stack-interior roots, and derived locations per GC root, in the
-// ordering required by JitMetadataBuilder::RecordSafepoint.
+// ordering required by FunctionMetadata::RecordSafepoint.
 struct SafepointRoots {
-    JitMetadataBuilder::Roots gcRoots;
-    JitMetadataBuilder::Roots stackRoots;
-    JitMetadataBuilder::DerivedRoots derivedRoots;
+    FunctionMetadata::Roots gcRoots;
+    FunctionMetadata::Roots stackRoots;
+    FunctionMetadata::DerivedRoots derivedRoots;
 };
 using SafepointLivenessResult = Result<SafepointRoots, std::string>;
 

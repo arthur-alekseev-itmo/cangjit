@@ -4,42 +4,42 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#include "JitMetadataBuilder.h"
+#include "FunctionMetadata.h"
 
 #include <algorithm>
 #include <functional>
 
 namespace Cangjie::JIT::X86_64 {
-void JitMetadataBuilder::RecordFrame(uint32_t size, const std::array<uint32_t, 5>& offsets)
+void FunctionMetadata::RecordFrame(uint32_t size, const std::array<uint32_t, 5>& offsets)
 {
     frameSize = size;
     hasFrame = true;
     savedOffsets = offsets;
 }
 
-void JitMetadataBuilder::RecordSafepoint(uint32_t pc, uint32_t gcRegisters, std::vector<int32_t> gcSlots,
+void FunctionMetadata::RecordSafepoint(uint32_t pc, uint32_t gcRegisters, std::vector<int32_t> gcSlots,
     uint32_t stackRegisters, std::vector<int32_t> stackSlots, uint32_t line, DerivedRoots derived)
 {
     safepoints.push_back({pc, Roots{gcRegisters, std::move(gcSlots)},
         Roots{stackRegisters, std::move(stackSlots)}, line, std::move(derived)});
 }
 
-size_t JitMetadataBuilder::RecordLandingPad(uint32_t offset, std::vector<uintptr_t> catchTypes)
+size_t FunctionMetadata::RecordLandingPad(uint32_t offset, std::vector<uintptr_t> catchTypes)
 {
     landingPads.push_back({offset, std::move(catchTypes)});
     return landingPads.size() - 1;
 }
 
-void JitMetadataBuilder::RecordCallSite(uint32_t start, uint32_t length, size_t landingPad)
+void FunctionMetadata::RecordCallSite(uint32_t start, uint32_t length, size_t landingPad)
 {
     callSites.push_back({start, length, landingPad});
 }
 
-JitMetadataBuilder::BuildResult JitMetadataBuilder::Build(uintptr_t metadataAddress, uintptr_t codeAddress,
-    uint32_t codeSize) const
+FunctionMetadata::SerializeResult FunctionMetadata::Serialize(uintptr_t metadataAddress,
+    uintptr_t codeAddress, uint32_t codeSize) const
 {
-    auto prefix = BuildPrefix(metadataAddress, codeAddress, codeSize);
-    if (!prefix) return BuildResult::Failure(std::move(prefix).Error());
+    auto prefix = EncodePrefix(metadataAddress, codeAddress, codeSize);
+    if (!prefix) return SerializeResult::Failure(std::move(prefix).Error());
 
     auto points = safepoints;
     std::sort(points.begin(), points.end(), [](const auto& a, const auto& b) { return a.pc < b.pc; });
@@ -50,18 +50,18 @@ JitMetadataBuilder::BuildResult JitMetadataBuilder::Build(uintptr_t metadataAddr
         return a.landingPad < b.landingPad;
     });
     auto error = ValidateMetadataInputs(sites, codeSize);
-    if (!error) return BuildResult::Failure(std::move(error).Error());
+    if (!error) return SerializeResult::Failure(std::move(error).Error());
 
-    auto map = BuildStackMap(points, codeSize);
-    if (!map) return BuildResult::Failure(std::move(map).Error());
-    auto eh = BuildExceptionTable(sites);
-    if (!eh) return BuildResult::Failure(std::move(eh).Error());
-    auto descriptor = BuildDescriptor(codeSize, map.Value(), eh.Value());
-    if (!descriptor) return BuildResult::Failure(std::move(descriptor).Error());
-    return BuildResult::Success({std::move(descriptor).Value(), prefix.Value()});
+    auto map = EncodeStackMap(points, codeSize);
+    if (!map) return SerializeResult::Failure(std::move(map).Error());
+    auto eh = EncodeExceptionTable(sites);
+    if (!eh) return SerializeResult::Failure(std::move(eh).Error());
+    auto descriptor = EncodeDescriptor(codeSize, map.Value(), eh.Value());
+    if (!descriptor) return SerializeResult::Failure(std::move(descriptor).Error());
+    return SerializeResult::Success({std::move(descriptor).Value(), prefix.Value()});
 }
 
-JitMetadataBuilder::EncodedPrefix JitMetadataBuilder::BuildPrefix(
+FunctionMetadata::EncodedPrefix FunctionMetadata::EncodePrefix(
     uintptr_t metadataAddress, uintptr_t codeAddress, uint32_t codeSize) const
 {
     if (metadataAddress == 0 || (metadataAddress & 3) != 0 || codeAddress < 4 || codeSize == 0) {
@@ -84,7 +84,8 @@ JitMetadataBuilder::EncodedPrefix JitMetadataBuilder::BuildPrefix(
     return EncodedPrefix::Success(prefixBytes);
 }
 
-Result<void, std::string> JitMetadataBuilder::ValidateMetadataInputs(const std::vector<CallSite>& sites, uint32_t codeSize) const
+Result<void, std::string> FunctionMetadata::ValidateMetadataInputs(const std::vector<CallSite>& sites,
+    uint32_t codeSize) const
 {
     uint64_t end = 0;
     for (const auto& site : sites) {
@@ -104,7 +105,8 @@ Result<void, std::string> JitMetadataBuilder::ValidateMetadataInputs(const std::
     return Result<void, std::string>::Success();
 }
 
-JitMetadataBuilder::EncodedBytes JitMetadataBuilder::BuildStackMap(std::vector<Safepoint>& points, uint32_t codeSize) const
+FunctionMetadata::EncodedBytes FunctionMetadata::EncodeStackMap(std::vector<Safepoint>& points,
+    uint32_t codeSize) const
 {
     // Table indices are one based. Each root set becomes a row; sharing is
     // unnecessary and preserving root order makes derived pairs unambiguous.
@@ -221,7 +223,7 @@ JitMetadataBuilder::EncodedBytes JitMetadataBuilder::BuildStackMap(std::vector<S
     return EncodedBytes::Success(std::move(map));
 }
 
-JitMetadataBuilder::EncodedBytes JitMetadataBuilder::BuildExceptionTable(const std::vector<CallSite>& sites) const
+FunctionMetadata::EncodedBytes FunctionMetadata::EncodeExceptionTable(const std::vector<CallSite>& sites) const
 {
     std::vector<uint8_t> eh, callTable, actions;
     std::vector<uintptr_t> types;
@@ -256,7 +258,7 @@ JitMetadataBuilder::EncodedBytes JitMetadataBuilder::BuildExceptionTable(const s
     return EncodedBytes::Success(std::move(eh));
 }
 
-JitMetadataBuilder::EncodedBytes JitMetadataBuilder::BuildDescriptor(uint32_t codeSize,
+FunctionMetadata::EncodedBytes FunctionMetadata::EncodeDescriptor(uint32_t codeSize,
     const std::vector<uint8_t>& map, const std::vector<uint8_t>& eh) const
 {
     // Descriptor followed by the trace flag, dictionary and encoded strings.
