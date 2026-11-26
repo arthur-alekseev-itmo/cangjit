@@ -5,11 +5,25 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "FunctionMetadata.h"
+#include "BinaryUtils.h"
 
 #include <algorithm>
 #include <functional>
 
+
 namespace Cangjie::JIT::X86_64 {
+namespace {
+void WriteStackMapVarUInt(BinaryUtils::BitWriter& writer, uint32_t value)
+{
+    if (value <= 11) {
+        writer.WriteBits(value, 4);
+        return;
+    }
+    const uint32_t width = value <= 0xff ? 8 : value <= 0xffff ? 16 : value <= 0xffffff ? 24 : 32;
+    writer.WriteBits(11 + width / 8, 4);
+    writer.WriteBits(value, width);
+}
+}
 void FunctionMetadata::RecordFrame(uint32_t size, const std::array<uint32_t, 5>& offsets)
 {
     frameSize = size;
@@ -173,50 +187,63 @@ FunctionMetadata::EncodedBytes FunctionMetadata::EncodeStackMap(std::vector<Safe
         slotBits = std::max(slotBits, static_cast<uint32_t>(width));
     }
     std::vector<uint8_t> map;
-    size_t bit = 0;
-    auto writeBits = [&](uint32_t value, uint32_t count) {
-        for (uint32_t i = 0; i < count; ++i, ++bit) {
-            if (bit / 8 == map.size()) map.push_back(0);
-            if (i < 32 && (value & (uint32_t{1} << i))) map[bit / 8] |= uint8_t{1} << (bit % 8);
-        }
-    };
-    auto var = [&](uint32_t value) {
-        if (value <= 11) { writeBits(value, 4); return; }
-        uint32_t width = value <= 0xff ? 8 : value <= 0xffff ? 16 : value <= 0xffffff ? 24 : 32;
-        writeBits(11 + width / 8, 4);
-        writeBits(value, width);
-    };
-    var(frameSize); var(0);
+    BinaryUtils::BitWriter writer(map);
+    WriteStackMapVarUInt(writer, frameSize);
+    WriteStackMapVarUInt(writer, 0);
     uint32_t savedMask = 0;
-    for (unsigned i = 0; i < savedOffsets.size(); ++i) if (savedOffsets[i] != UINT32_MAX) savedMask |= 1u << i;
-    var(savedMask);
-    for (auto offset : savedOffsets) if (offset != UINT32_MAX) var(offset);
-    var(static_cast<uint32_t>(rows.size()));
-    var(regIndexBits); var(slotIndexBits); var(lineIndexBits); var(derivedIndexBits);
-    if (stackGrowth) { var(stackRegBits); var(stackSlotBits); }
-    uint32_t padding = static_cast<uint32_t>((8 - (bit + 4) % 8) % 8);
-    var(padding); writeBits(0, padding);
-    for (const auto& row : rows) {
-        writeBits(row[0], 32); writeBits(row[1], regIndexBits); writeBits(row[2], slotIndexBits);
-        writeBits(row[3], lineIndexBits); writeBits(row[4], derivedIndexBits);
-        if (stackGrowth) { writeBits(row[5], stackRegBits); writeBits(row[6], stackSlotBits); }
+    for (unsigned i = 0; i < savedOffsets.size(); ++i) {
+        if (savedOffsets[i] != UINT32_MAX) savedMask |= 1u << i;
     }
-    var(static_cast<uint32_t>(regs.size())); var(regBits);
-    for (auto r : regs) writeBits(r, regBits);
-    var(static_cast<uint32_t>(slots.size())); var(32); var(slotBits);
+    WriteStackMapVarUInt(writer, savedMask);
+    for (auto offset : savedOffsets) {
+        if (offset != UINT32_MAX) WriteStackMapVarUInt(writer, offset);
+    }
+    WriteStackMapVarUInt(writer, static_cast<uint32_t>(rows.size()));
+    WriteStackMapVarUInt(writer, regIndexBits);
+    WriteStackMapVarUInt(writer, slotIndexBits);
+    WriteStackMapVarUInt(writer, lineIndexBits);
+    WriteStackMapVarUInt(writer, derivedIndexBits);
+    if (stackGrowth) {
+        WriteStackMapVarUInt(writer, stackRegBits);
+        WriteStackMapVarUInt(writer, stackSlotBits);
+    }
+    const uint32_t padding = static_cast<uint32_t>((8 - (writer.GetBitOffset() + 4) % 8) % 8);
+    WriteStackMapVarUInt(writer, padding);
+    writer.WriteBits(0, padding);
+    for (const auto& row : rows) {
+        writer.WriteBits(row[0], 32);
+        writer.WriteBits(row[1], regIndexBits);
+        writer.WriteBits(row[2], slotIndexBits);
+        writer.WriteBits(row[3], lineIndexBits);
+        writer.WriteBits(row[4], derivedIndexBits);
+        if (stackGrowth) {
+            writer.WriteBits(row[5], stackRegBits);
+            writer.WriteBits(row[6], stackSlotBits);
+        }
+    }
+    WriteStackMapVarUInt(writer, static_cast<uint32_t>(regs.size()));
+    WriteStackMapVarUInt(writer, regBits);
+    for (auto r : regs) writer.WriteBits(r, regBits);
+    WriteStackMapVarUInt(writer, static_cast<uint32_t>(slots.size()));
+    WriteStackMapVarUInt(writer, 32);
+    WriteStackMapVarUInt(writer, slotBits);
     for (const auto& s : slots) {
-        writeBits(static_cast<uint32_t>(s.front()), 32);
+        writer.WriteBits(static_cast<uint32_t>(s.front()), 32);
         size_t pos = 0;
         for (uint32_t i = 0; i < slotBits; ++i) {
-            bool set = pos < s.size() && int64_t{s.front()} - int64_t{i} * 8 == s[pos];
-            writeBits(set ? 1 : 0, 1);
+            const bool set = pos < s.size() && int64_t{s.front()} - int64_t{i} * 8 == s[pos];
+            writer.WriteBits(set ? 1 : 0, 1);
             if (set) ++pos;
         }
     }
-    var(static_cast<uint32_t>(lines.size())); var(lineBits);
-    for (auto l : lines) writeBits(l, lineBits);
-    var(static_cast<uint32_t>(derivatives.size()));
-    for (auto d : derivatives) { writeBits(d.registers, regIndexBits); writeBits(d.slots, slotIndexBits); }
+    WriteStackMapVarUInt(writer, static_cast<uint32_t>(lines.size()));
+    WriteStackMapVarUInt(writer, lineBits);
+    for (auto l : lines) writer.WriteBits(l, lineBits);
+    WriteStackMapVarUInt(writer, static_cast<uint32_t>(derivatives.size()));
+    for (auto d : derivatives) {
+        writer.WriteBits(d.registers, regIndexBits);
+        writer.WriteBits(d.slots, slotIndexBits);
+    }
     // Runtime bit reads may access four bytes beyond the final field.
     map.resize(map.size() + 5, 0);
 
@@ -227,13 +254,13 @@ FunctionMetadata::EncodedBytes FunctionMetadata::EncodeExceptionTable(const std:
 {
     std::vector<uint8_t> eh, callTable, actions;
     std::vector<uintptr_t> types;
-    auto uleb = [](std::vector<uint8_t>& out, uint64_t v) {
-        do { uint8_t b = v & 0x7f; v >>= 7; out.push_back(b | (v ? 0x80 : 0)); } while (v);
-    };
     for (const auto& site : sites) {
         const auto& [offset, catches] = landingPads[site.landingPad];
         uint64_t action = catches.empty() ? 0 : actions.size() + 1;
-        uleb(callTable, site.start); uleb(callTable, site.length); uleb(callTable, offset); uleb(callTable, action);
+        BinaryUtils::AppendULEB128(callTable, site.start);
+        BinaryUtils::AppendULEB128(callTable, site.length);
+        BinaryUtils::AppendULEB128(callTable, offset);
+        BinaryUtils::AppendULEB128(callTable, action);
         for (size_t i = 0; i < catches.size(); ++i) {
             if (types.size() == 255) return EncodedBytes::Failure("too many exception types");
             types.push_back(catches[i]);
@@ -245,13 +272,13 @@ FunctionMetadata::EncodedBytes FunctionMetadata::EncodeExceptionTable(const std:
         eh.push_back(0xff); eh.push_back(0); // omitted LPStart, absolute pointer type table
         std::vector<uint8_t> tail;
         tail.push_back(1); // ULEB128 call-site encoding
-        uleb(tail, callTable.size());
+        BinaryUtils::AppendULEB128(tail, callTable.size());
         tail.insert(tail.end(), callTable.begin(), callTable.end());
         tail.insert(tail.end(), actions.begin(), actions.end());
         for (auto it = types.rbegin(); it != types.rend(); ++it) {
-            for (unsigned i = 0; i < 8; ++i) tail.push_back(static_cast<uint8_t>(*it >> (i * 8)));
+            BinaryUtils::AppendU64LE(tail, static_cast<uint64_t>(*it));
         }
-        uleb(eh, tail.size());
+        BinaryUtils::AppendULEB128(eh, tail.size());
         eh.insert(eh.end(), tail.begin(), tail.end());
     }
 
@@ -263,10 +290,8 @@ FunctionMetadata::EncodedBytes FunctionMetadata::EncodeDescriptor(uint32_t codeS
 {
     // Descriptor followed by the trace flag, dictionary and encoded strings.
     // One dictionary entry per nonempty string avoids any mangling assumptions.
-    std::vector<uint8_t> result(28, 0);
-    auto put32 = [&](size_t at, uint32_t v) {
-        for (unsigned i = 0; i < 4; ++i) result[at + i] = static_cast<uint8_t>(v >> (8 * i));
-    };
+    std::vector<uint8_t> result;
+    for (unsigned i = 0; i < 7; ++i) BinaryUtils::AppendU32LE(result, 0);
     result.insert(result.end(), 3, 0);
     result.push_back(1); // default stack-trace format
     size_t dict = result.size();
@@ -284,18 +309,29 @@ FunctionMetadata::EncodedBytes FunctionMetadata::EncodeDescriptor(uint32_t codeS
         }
         result.push_back(0);
     }
-    put32(dict, count);
-    put32(dict + 4, static_cast<uint32_t>(result.size() - dict));
+    if (!BinaryUtils::PatchU32LE(result, dict, count) ||
+        !BinaryUtils::PatchU32LE(result, dict + 4, static_cast<uint32_t>(result.size() - dict))) {
+        return EncodedBytes::Failure("invalid descriptor patch offset");
+    }
     result.insert(result.end(), dictionary.begin(), dictionary.end());
     result.push_back(0);
-    put32(4, codeSize); put32(8, offsets[0]); put32(12, offsets[1]); put32(16, offsets[2]);
-    put32(20, static_cast<uint32_t>(dict));
+    if (!BinaryUtils::PatchU32LE(result, 4, codeSize) ||
+        !BinaryUtils::PatchU32LE(result, 8, offsets[0]) ||
+        !BinaryUtils::PatchU32LE(result, 12, offsets[1]) ||
+        !BinaryUtils::PatchU32LE(result, 16, offsets[2]) ||
+        !BinaryUtils::PatchU32LE(result, 20, static_cast<uint32_t>(dict))) {
+        return EncodedBytes::Failure("invalid descriptor patch offset");
+    }
     if (result.size() > INT32_MAX) return EncodedBytes::Failure("metadata too large");
-    put32(0, static_cast<uint32_t>(result.size()));
+    if (!BinaryUtils::PatchU32LE(result, 0, static_cast<uint32_t>(result.size()))) {
+        return EncodedBytes::Failure("invalid descriptor patch offset");
+    }
     result.insert(result.end(), map.begin(), map.end());
     if (!eh.empty()) {
         if (result.size() > INT32_MAX) return EncodedBytes::Failure("metadata too large");
-        put32(24, static_cast<uint32_t>(result.size() - 24));
+        if (!BinaryUtils::PatchU32LE(result, 24, static_cast<uint32_t>(result.size() - 24))) {
+            return EncodedBytes::Failure("invalid descriptor patch offset");
+        }
         result.insert(result.end(), eh.begin(), eh.end());
     }
     return EncodedBytes::Success(std::move(result));
