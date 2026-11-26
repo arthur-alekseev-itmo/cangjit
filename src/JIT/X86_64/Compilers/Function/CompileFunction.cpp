@@ -262,9 +262,6 @@ void CompileFunction::Compile(FunctionContext& context) const
         context.Fail(JitFailureKind::UnsupportedCallingConvention);
         return;
     }
-    if (!context.GetLocalFinalizers().Prepare()) {
-        return;
-    }
     // Runtime metadata discovery reads a relative descriptor pointer here.
     context.GetAssembler().embedUInt32(0);
     MakePrologue(context);
@@ -286,7 +283,6 @@ void CompileFunction::Compile(FunctionContext& context) const
         }
     }
     MakeEpilogue(context, *placements);
-    context.GetLocalFinalizers().EmitEdges();
 }
 
 bool CompileFunction::SaveParameters(FunctionContext& context, const ParameterPlacement& placements) const

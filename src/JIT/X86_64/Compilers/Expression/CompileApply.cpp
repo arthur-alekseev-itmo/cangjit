@@ -244,7 +244,7 @@ void EmitCall(FunctionContext& context, const CHIR::ApplyBase& expression, const
         }
     }
     if (normal && unwind && !context.GetFailure()) {
-        assembler.jmp(context.GetLocalFinalizers().GetEdgeLabel(normal));
+        assembler.jmp(context.GetBlockLabel(normal));
         context.GetExceptionLandingEmitter().Emit(*unwind, callStart, callEnd);
     }
 }

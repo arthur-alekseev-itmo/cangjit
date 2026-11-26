@@ -14,7 +14,6 @@
 
 #include "JitFailure.h"
 #include "ExceptionLandingEmitter.h"
-#include "LocalFinalizers.h"
 #include "SafepointRecorder.h"
 #include "TypeInfoEmitter.h"
 #include "../../../Runtime/FunctionMetadata.h"
@@ -52,7 +51,6 @@ public:
     SafepointRecorder& GetSafepointRecorder() noexcept { return safepointRecorder; }
     ExceptionLandingEmitter& GetExceptionLandingEmitter() noexcept { return exceptionLandingEmitter; }
     asmjit::Error GetError() const noexcept;
-    LocalFinalizers& GetLocalFinalizers() noexcept { return localFinalizers; }
     asmjit::Label GetBlockLabel(const CHIR::Block* block);
     asmjit::Label GetEpilogueLabel() const noexcept;
     void Fail(JitFailureKind kind, std::optional<CHIR::ExprKind> expressionKind = std::nullopt) noexcept;
@@ -89,7 +87,6 @@ private:
     SafepointRecorder safepointRecorder{*this};
     ExceptionLandingEmitter exceptionLandingEmitter{*this};
     TypeInfoEmitter typeInfoEmitter{*this};
-    LocalFinalizers localFinalizers{*this};
     asmjit::Label epilogueLabel;
     std::unordered_map<const CHIR::Block*, asmjit::Label> blockLabels;
     const CHIR::Function* function;

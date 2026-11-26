@@ -42,7 +42,7 @@ void CompileUnaryExpression::Compile(FunctionContext& ctx, const CHIR::UnaryExpr
         a.xor_(asmjit::x86::rax, asmjit::x86::rcx);
         MemoryUtils::StoreValue(ctx, result, asmjit::x86::rax);
         if (normal && !ctx.GetFailure()) {
-            a.jmp(ctx.GetLocalFinalizers().GetEdgeLabel(normal));
+            a.jmp(ctx.GetBlockLabel(normal));
         }
         return;
     }
@@ -111,7 +111,7 @@ void CompileUnaryExpression::Compile(FunctionContext& ctx, const CHIR::UnaryExpr
     }
     MemoryUtils::StoreValue(ctx, result, asmjit::x86::rax);
     if (normal && !ctx.GetFailure()) {
-        a.jmp(ctx.GetLocalFinalizers().GetEdgeLabel(normal));
+        a.jmp(ctx.GetBlockLabel(normal));
     }
 }
 } // namespace Cangjie::JIT::X86_64

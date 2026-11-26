@@ -266,7 +266,7 @@ void CompileCall(FunctionContext& context, const CHIR::DynamicDispatch& expressi
         }
     }
     if (normal && unwind && !context.GetFailure()) {
-        a.jmp(context.GetLocalFinalizers().GetEdgeLabel(normal));
+        a.jmp(context.GetBlockLabel(normal));
         context.GetExceptionLandingEmitter().Emit(*unwind, callStart, callEnd);
     }
 }

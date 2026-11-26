@@ -186,7 +186,7 @@ void CompileFloatBinary(FunctionContext& ctx, const CHIR::BinaryExpressionBase& 
         MemoryUtils::StoreFloatValue(ctx, expr.GetResult(), asmjit::x86::xmm0, asmjit::x86::rax);
     }
     if (normal && !ctx.GetFailure()) {
-        a.jmp(ctx.GetLocalFinalizers().GetEdgeLabel(normal));
+        a.jmp(ctx.GetBlockLabel(normal));
     }
 }
 } // namespace
@@ -344,7 +344,7 @@ void CompileBinaryExpression::Compile(FunctionContext& ctx, const CHIR::BinaryEx
     }
     MemoryUtils::StoreValue(ctx, result, asmjit::x86::rax);
     if (normal && !ctx.GetFailure()) {
-        a.jmp(ctx.GetLocalFinalizers().GetEdgeLabel(normal));
+        a.jmp(ctx.GetBlockLabel(normal));
     }
 }
 } // namespace Cangjie::JIT::X86_64

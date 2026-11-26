@@ -167,7 +167,7 @@ void CompileAllocation(FunctionContext& context, const CHIR::AllocateBase& expre
         assembler.call(x86::r11);
     }
     if (normal && unwind && !context.GetFailure()) {
-        assembler.jmp(context.GetLocalFinalizers().GetEdgeLabel(normal));
+        assembler.jmp(context.GetBlockLabel(normal));
         context.GetExceptionLandingEmitter().Emit(*unwind, callStart, callEnd);
     }
 }

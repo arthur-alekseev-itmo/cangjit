@@ -103,7 +103,7 @@ void CompileNumericCast::Compile(FunctionContext& context, const CHIR::NumericCa
     TypeUtils::NormalizeInteger(assembler, asmjit::x86::rax, targetWidth, targetSigned);
     MemoryUtils::StoreValue(context, result, asmjit::x86::rax);
     if (normal && !context.GetFailure()) {
-        assembler.jmp(context.GetLocalFinalizers().GetEdgeLabel(normal));
+        assembler.jmp(context.GetBlockLabel(normal));
     }
 }
 
@@ -121,7 +121,7 @@ void CompileNumericCast::CompileFloatCast(FunctionContext& context, const CHIR::
     }
     MemoryUtils::StoreFloatValue(context, result, asmjit::x86::xmm0, asmjit::x86::rax);
     if (normal && !context.GetFailure()) {
-        assembler.jmp(context.GetLocalFinalizers().GetEdgeLabel(normal));
+        assembler.jmp(context.GetBlockLabel(normal));
     }
 }
 } // namespace Cangjie::JIT::X86_64

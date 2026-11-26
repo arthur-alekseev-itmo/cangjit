@@ -278,7 +278,7 @@ void CompileBeginCatch(FunctionContext& context, const CHIR::IntrinsicBase& expr
         MemoryUtils::StoreValue(context, expression.GetResult(), asmjit::x86::rax);
     }
     if (normal && unwind && !context.GetFailure()) {
-        a.jmp(context.GetLocalFinalizers().GetEdgeLabel(normal));
+        a.jmp(context.GetBlockLabel(normal));
         context.GetExceptionLandingEmitter().Emit(*unwind, callStart, callEnd);
     }
 }
@@ -312,7 +312,6 @@ void CompileRaiseException(FunctionContext& context, const CHIR::RaiseException&
 
 void CompileBlock::Compile(FunctionContext& context, const CHIR::Block& block)
 {
-    context.GetLocalFinalizers().SetCurrentBlock(block);
     context.GetAssembler().bind(context.GetBlockLabel(&block));
     if (context.GetFailure() || context.GetError() != asmjit::kErrorOk) {
         return;
@@ -320,8 +319,7 @@ void CompileBlock::Compile(FunctionContext& context, const CHIR::Block& block)
     const auto expressions = block.GetExpressions();
     for (size_t i = 0; i < expressions.size(); ++i) {
         CompileExpression(context, *expressions[i]);
-        if (context.GetFailure() || context.GetError() != asmjit::kErrorOk ||
-            (i + 1 < expressions.size() && !context.GetLocalFinalizers().EmitAfter(*expressions[i], *expressions[i + 1]))) {
+        if (context.GetFailure() || context.GetError() != asmjit::kErrorOk) {
             return;
         }
     }
