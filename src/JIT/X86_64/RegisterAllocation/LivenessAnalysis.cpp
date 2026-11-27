@@ -7,12 +7,11 @@
 #include "LivenessAnalysis.h"
 
 #include <algorithm>
-#include <cassert>
 #include <utility>
 
+#include "../JitAssert.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
-#include "cangjie/Utils/CheckUtils.h"
 
 namespace Cangjie::JIT::X86_64 {
 namespace {
@@ -71,15 +70,14 @@ void LivenessAnalysis::Transfer(const CHIR::Expression& expression, const ValueN
 void LivenessAnalysis::CollectBlocks(const CHIR::Function& function)
 {
     auto body = function.GetBody();
-    assert(body != nullptr);
+    JIT_ASSERT(body != nullptr, "analyzed function has a body");
     blocks = body->GetAllBlocks();
     blocks.erase(std::remove_if(blocks.begin(), blocks.end(),
         [&](const CHIR::Block* block) { return block->GetFuncOrLambdaBody() != body; }), blocks.end());
     blockIndices.reserve(blocks.size());
     for (size_t i = 0; i < blocks.size(); ++i) {
-        const bool inserted = blockIndices.emplace(blocks[i], i).second;
-        assert(inserted);
-        (void)inserted;
+        // GetAllBlocks lists each block of a body once.
+        JIT_ASSERT(blockIndices.emplace(blocks[i], i).second, "block indices are unique");
     }
 }
 
@@ -90,10 +88,8 @@ void LivenessAnalysis::Compute(const ValueNumeration& numeration)
     for (size_t i = 0; i < blocks.size(); ++i) {
         for (auto successor : blocks[i]->GetSuccessors()) {
             const auto found = blockIndices.find(successor);
-            CJC_ASSERT(found != blockIndices.end());
-            if (found != blockIndices.end()) {
-                successorIndices.push_back(found->second);
-            }
+            JIT_ASSERT(found != blockIndices.end(), "CFG successor belongs to the analyzed function");
+            successorIndices.push_back(found->second);
         }
         successorOffsets[i + 1] = successorIndices.size();
     }
@@ -174,9 +170,9 @@ Liveness LivenessAnalysis::MakeLiveness(const ValueNumeration& numeration)
         for (size_t i = count; i > 0; --i) {
             auto expression = chirBlock->GetExpressionByIdx(i - 1);
             const size_t row = first + i - 1;
-            const bool inserted = result.expressionIndices.emplace(expression, row).second;
-            assert(inserted);
-            (void)inserted;
+            // Each expression appears in exactly one block at one index.
+            JIT_ASSERT(result.expressionIndices.emplace(expression, row).second,
+                "expression rows are unique");
             auto before = GetRow(result.bitmaps, row, wordsPerBlock);
             if (wordsPerBlock != 0) {
                 auto after = GetRow(result.bitmaps, row + 1, wordsPerBlock);

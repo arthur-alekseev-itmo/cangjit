@@ -32,7 +32,7 @@ public:
     const Word* GetLiveBefore(const CHIR::Expression& expression) const noexcept;
     const Word* GetLiveAfter(const CHIR::Expression& expression) const noexcept;
     const Word* GetLiveIn(const CHIR::Block* block) const noexcept;
-    std::optional<size_t> GetBlockIndex(const CHIR::Block* block) const noexcept;
+    size_t GetBlockIndex(const CHIR::Block* block) const noexcept;
     size_t GetWordCount() const noexcept { return wordsPerSet; }
     const std::vector<CHIR::Block*>& GetBlocks() const noexcept { return blocks; }
     void Dump(std::ostream& output, const ValueNumeration& numeration) const;

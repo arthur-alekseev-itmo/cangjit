@@ -26,30 +26,23 @@ class CompileFunction final {
 public:
     CompileFunction(GlobalContext& globalContext, const CHIR::Function& function) noexcept;
 
-    CompilationResult CompileToAddress() const;
+    CodeAddress CompileToAddress() const;
     void Compile(FunctionContext& context) const;
 
 private:
-    CompilationResult CompileToAddressImpl() const;
-    CompilationResult Publish(FunctionContext& context) const;
+    CodeAddress CompileToAddressImpl() const;
+    CodeAddress Publish(FunctionContext& context) const;
 
-    bool GetCodeSize(FunctionContext& context, uint32_t& codeSize, CompilationError& error) const;
-    bool GetFrameSize(FunctionContext& context, uint32_t& frameSize, CompilationError& error) const;
-    bool PrepareMetadata(FunctionContext& context, uint32_t codeSize, uint32_t frameSize, size_t& metadataOffset,
-        size_t& metadataSize, CompilationError& error) const;
-    CompilationResult AllocateCode(FunctionContext& context) const;
-    bool WriteMetadata(FunctionContext& context, CodeAddress base, uint32_t codeSize, size_t metadataOffset,
-        size_t metadataSize, size_t& publishedMetadataSize, CompilationError& error) const;
-    bool RegisterLazyCallSites(FunctionContext& context, CodeAddress base) const;
+    CodeAddress AllocateCode(FunctionContext& context) const;
     void PrintDebugInfo(const FunctionContext& context) const;
     void MakePrologue(FunctionContext& context) const;
     void MakeEpilogue(FunctionContext& context, const ParameterPlacement& placement) const;
-    bool SaveReturnValue(FunctionContext& context, const ParameterPlacement& placement) const;
-    bool SaveParameters(FunctionContext& context, const ParameterPlacement& placements) const;
-    bool SaveParameter(FunctionContext& context, const ParameterPlacement& placements,
+    void SaveReturnValue(FunctionContext& context, const ParameterPlacement& placement) const;
+    void SaveParameters(FunctionContext& context, const ParameterPlacement& placements) const;
+    void SaveParameter(FunctionContext& context, const ParameterPlacement& placements,
         const CHIR::Parameter* parameter) const;
-    bool SaveHiddenTypeInfo(FunctionContext& context, const ParameterPlacement& placements) const;
-    bool SaveHiddenTypeInfoLocation(FunctionContext& context, const Location& location, size_t index) const;
+    void SaveHiddenTypeInfo(FunctionContext& context, const ParameterPlacement& placements) const;
+    void SaveHiddenTypeInfoLocation(FunctionContext& context, const Location& location, size_t index) const;
 
     GlobalContext& globalContext;
     const CHIR::Function& function;

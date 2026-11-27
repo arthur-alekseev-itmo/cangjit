@@ -124,7 +124,7 @@ ParameterPlacement ComputePlacement(const CHIR::Function& function,
             placement.thisTypeInfoLocation = nextInteger(OperandWidth::QWORD);
         }
     }
-    placement.stackSize = *StackFrameUtils::GetFrameSize(stackIndex);
+    placement.stackSize = StackFrameUtils::GetFrameSize(stackIndex);
     return placement;
 }
 } // namespace

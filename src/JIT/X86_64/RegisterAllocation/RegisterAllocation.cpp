@@ -6,10 +6,10 @@
 
 #include "RegisterAllocation.h"
 
-#include <cassert>
 #include <ostream>
 #include <utility>
 
+#include "../JitAssert.h"
 namespace Cangjie::JIT::X86_64 {
 namespace {
 constexpr size_t REGISTER_TYPE_COUNT = static_cast<size_t>(GPRegisterType::COUNT);
@@ -60,7 +60,7 @@ void DumpLocation(const Location& location, std::ostream& output)
         return;
     }
     auto stack = location.AsIncomingStack();
-    assert(stack != nullptr);
+    JIT_ASSERT(stack != nullptr, "location is a stack, register or incoming stack slot");
     output << "INCOMING_STACK(" << stack->index << ')';
 }
 } // namespace
@@ -73,7 +73,7 @@ RegisterAllocation::RegisterAllocation(std::vector<Location> locations, size_t s
 
 const Location& RegisterAllocation::GetLocation(ValueNumeration::Id valueId) const noexcept
 {
-    assert(static_cast<size_t>(valueId) < locations.size());
+    JIT_ASSERT(static_cast<size_t>(valueId) < locations.size(), "value is allocated");
     return locations[valueId];
 }
 

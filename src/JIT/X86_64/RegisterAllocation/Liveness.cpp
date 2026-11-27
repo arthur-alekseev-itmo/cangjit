@@ -6,9 +6,9 @@
 
 #include "Liveness.h"
 
-#include <cassert>
 #include <ostream>
 
+#include "../JitAssert.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
 
@@ -30,28 +30,27 @@ bool Liveness::ContainsExpression(const CHIR::Expression& expression) const noex
 const Liveness::Word* Liveness::GetLiveBefore(const CHIR::Expression& expression) const noexcept
 {
     const auto found = expressionIndices.find(&expression);
-    assert(found != expressionIndices.end());
+    JIT_ASSERT(found != expressionIndices.end(), "expression belongs to the analyzed function");
     return wordsPerSet == 0 ? nullptr : bitmaps.data() + found->second * wordsPerSet;
 }
 
 const Liveness::Word* Liveness::GetLiveAfter(const CHIR::Expression& expression) const noexcept
 {
     const auto found = expressionIndices.find(&expression);
-    assert(found != expressionIndices.end());
+    JIT_ASSERT(found != expressionIndices.end(), "expression belongs to the analyzed function");
     return wordsPerSet == 0 ? nullptr : bitmaps.data() + (found->second + 1) * wordsPerSet;
 }
 
 const Liveness::Word* Liveness::GetLiveIn(const CHIR::Block* block) const noexcept
 {
-    const auto index = GetBlockIndex(block);
-    assert(index);
-    return wordsPerSet == 0 ? nullptr : bitmaps.data() + blockOffsets[*index] * wordsPerSet;
+    return wordsPerSet == 0 ? nullptr : bitmaps.data() + GetBlockIndex(block) * wordsPerSet;
 }
 
-std::optional<size_t> Liveness::GetBlockIndex(const CHIR::Block* block) const noexcept
+size_t Liveness::GetBlockIndex(const CHIR::Block* block) const noexcept
 {
     const auto found = blockIndices.find(block);
-    return found == blockIndices.end() ? std::nullopt : std::optional<size_t>(found->second);
+    JIT_ASSERT(found != blockIndices.end(), "block belongs to the analyzed function");
+    return found->second;
 }
 
 void Liveness::Dump(std::ostream& output, const ValueNumeration& numeration) const

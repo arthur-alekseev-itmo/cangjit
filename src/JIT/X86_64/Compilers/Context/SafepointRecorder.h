@@ -18,7 +18,7 @@ class FunctionContext;
 class SafepointRecorder final {
 public:
     explicit SafepointRecorder(FunctionContext& context) noexcept : context(context) {}
-    bool Record(const CHIR::Expression& expression, const CHIR::Value* temporaryRoot = nullptr);
+    void Record(const CHIR::Expression& expression, const CHIR::Value* temporaryRoot = nullptr);
 
 private:
     FunctionContext& context;

@@ -6,8 +6,9 @@
 
 #include "InterferenceGraph.h"
 
-#include <cassert>
 #include <ostream>
+
+#include "../JitAssert.h"
 
 namespace Cangjie::JIT::X86_64 {
 namespace {
@@ -27,7 +28,7 @@ NeighborBitmap::NeighborBitmap(
 
 bool NeighborBitmap::Contains(NodeId node) const noexcept
 {
-    assert(node < nodeCount);
+    JIT_ASSERT(node < nodeCount, "interference node is in range");
     const size_t word = static_cast<size_t>(node) / BITS_PER_WORD;
     return (words[word] & GetBitMask(node)) != 0;
 }
@@ -61,8 +62,7 @@ InterferenceGraph::NodeId InterferenceGraph::GetNodeCount() const noexcept
 
 void InterferenceGraph::AddEdge(NodeId first, NodeId second) noexcept
 {
-    assert(first < nodeCount);
-    assert(second < nodeCount);
+    JIT_ASSERT(first < nodeCount && second < nodeCount, "interference edge nodes are in range");
     if (first == second) {
         return;
     }
@@ -73,8 +73,7 @@ void InterferenceGraph::AddEdge(NodeId first, NodeId second) noexcept
 
 bool InterferenceGraph::Interferes(NodeId first, NodeId second) const noexcept
 {
-    assert(first < nodeCount);
-    assert(second < nodeCount);
+    JIT_ASSERT(first < nodeCount && second < nodeCount, "interference query nodes are in range");
     if (first == second) {
         return false;
     }
@@ -83,7 +82,7 @@ bool InterferenceGraph::Interferes(NodeId first, NodeId second) const noexcept
 
 NeighborBitmap InterferenceGraph::GetNeighbors(NodeId node) const noexcept
 {
-    assert(node < nodeCount);
+    JIT_ASSERT(node < nodeCount, "interference node is in range");
     const auto rowOffset = static_cast<size_t>(node) * wordsPerNode;
     return NeighborBitmap(adjacency.data() + rowOffset, wordsPerNode, nodeCount);
 }

@@ -10,7 +10,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <string>
 #include <utility>
 #include <variant>
 
@@ -65,14 +64,6 @@ private:
 };
 
 using CodeAddress = uintptr_t;
-
-
-// External diagnostics can include AsmJit errors as well as JitFailureKind messages.
-struct CompilationError {
-    std::string message;
-};
-
-using CompilationResult = Result<CodeAddress, CompilationError>;
 } // namespace Cangjie::JIT::X86_64
 
 #endif // CANGJIE_JIT_X86_64_TYPES_H

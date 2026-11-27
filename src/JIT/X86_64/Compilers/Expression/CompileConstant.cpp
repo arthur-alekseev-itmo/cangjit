@@ -6,7 +6,9 @@
 
 #include "CompileConstant.h"
 
+#include "../../JitAssert.h"
 #include "../../Utils/MemoryUtils.h"
+#include "../../../Runtime/RuntimeError.h"
 #include "../Context/FunctionContext.h"
 #include "../Context/GlobalContext.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
@@ -16,11 +18,10 @@
 
 #include <cstdint>
 #include <cstring>
-#include <optional>
 
 namespace Cangjie::JIT::X86_64 {
 namespace {
-std::optional<uint64_t> GetLiteralBits(FunctionContext& context, const CHIR::LiteralValue& literal)
+uint64_t GetLiteralBits(const CHIR::LiteralValue& literal)
 {
     if (literal.IsBoolLiteral()) {
         return static_cast<const CHIR::BoolLiteral&>(literal).GetVal() ? 1 : 0;
@@ -49,26 +50,16 @@ std::optional<uint64_t> GetLiteralBits(FunctionContext& context, const CHIR::Lit
             return bits;
         }
     }
-    context.Fail(JitFailureKind::UnsupportedLiteral);
-    return std::nullopt;
+    JIT_FAIL("unsupported literal operand");
 }
 
-std::optional<uint64_t> GetGlobalAddress(FunctionContext& context, const CHIR::Value& value)
+uintptr_t GetGlobalAddress(FunctionContext& context, const CHIR::Value& value)
 {
-    if (!value.IsImportedVar()) {
-        context.Fail(JitFailureKind::UnsupportedPackageGlobal);
-        return std::nullopt;
-    }
+    JIT_ASSERT(value.IsImportedVar(), "package-local global storage is not supported");
     auto& bindings = context.GetGlobalContext().GetRuntimeBindings();
-    if (!bindings.EnsurePackage(static_cast<const CHIR::GlobalVar&>(value).GetPackageName())) {
-        context.Fail(JitFailureKind::UnresolvedSymbol);
-        return std::nullopt;
-    }
-    const auto resolved = bindings.Resolve(value.GetIdentifierWithoutPrefix());
-    if (!resolved) {
-        context.Fail(JitFailureKind::UnresolvedSymbol);
-        return std::nullopt;
-    }
+    Require(bindings.EnsurePackage(static_cast<const CHIR::GlobalVar&>(value).GetPackageName()));
+    auto resolved = bindings.Resolve(value.GetIdentifierWithoutPrefix());
+    Require(resolved);
     return reinterpret_cast<uintptr_t>(resolved.Value());
 }
 } // namespace
@@ -77,27 +68,20 @@ void CompileConstant::Compile(FunctionContext& context, const CHIR::Constant& ex
 {
     auto value = expression.GetValue();
     auto result = expression.GetResult();
-    if (!value || !result || !result->GetType()) {
-        context.Fail(JitFailureKind::MissingOperand);
-        return;
-    }
+    JIT_ASSERT(value && result && result->GetType(), "constant has a value and a typed result");
     auto destination = context.GetValueLocation(result);
     if (value->IsUnitLiteral()) {
         MemoryUtils::StoreConstant(context, 0, *destination, *result->GetType(), asmjit::x86::rax);
         return;
     }
     if (value->IsLiteral()) {
-        const auto bits = GetLiteralBits(context, static_cast<const CHIR::LiteralValue&>(*value));
-        if (bits) {
-            MemoryUtils::StoreConstant(context, *bits, *destination, *result->GetType(), asmjit::x86::rax);
-        }
+        const auto bits = GetLiteralBits(static_cast<const CHIR::LiteralValue&>(*value));
+        MemoryUtils::StoreConstant(context, bits, *destination, *result->GetType(), asmjit::x86::rax);
         return;
     }
     if (value->IsGlobalVar()) {
         const auto address = GetGlobalAddress(context, *value);
-        if (address) {
-            MemoryUtils::StoreConstant(context, *address, *destination, *result->GetType(), asmjit::x86::rax);
-        }
+        MemoryUtils::StoreConstant(context, address, *destination, *result->GetType(), asmjit::x86::rax);
         return;
     }
     auto source = context.GetValueLocation(value);

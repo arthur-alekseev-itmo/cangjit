@@ -14,7 +14,7 @@
 namespace Cangjie::JIT::X86_64::BinaryUtils {
 void AppendU32LE(std::vector<uint8_t>& output, uint32_t value);
 void AppendU64LE(std::vector<uint8_t>& output, uint64_t value);
-bool PatchU32LE(std::vector<uint8_t>& output, size_t offset, uint32_t value);
+void PatchU32LE(std::vector<uint8_t>& output, size_t offset, uint32_t value);
 void AppendULEB128(std::vector<uint8_t>& output, uint64_t value);
 
 class BitWriter final {

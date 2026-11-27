@@ -6,56 +6,46 @@
 
 #include "SafepointRecorder.h"
 
-#include <algorithm>
-#include <functional>
-#include <limits>
-#include <utility>
-
 #include "FunctionContext.h"
 #include "GlobalContext.h"
+#include "../../JitAssert.h"
 #include "../../RegisterAllocation/SafepointLiveness.h"
 #include "../../Utils/StackFrameUtils.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 
+#include <functional>
+#include <limits>
+
 namespace Cangjie::JIT::X86_64 {
-bool SafepointRecorder::Record(const CHIR::Expression& expression, const CHIR::Value* temporaryRoot)
+void SafepointRecorder::Record(const CHIR::Expression& expression, const CHIR::Value* temporaryRoot)
 {
     const auto offset = context.GetAssembler().offset();
-    if (offset < 4 || offset - 4 > std::numeric_limits<uint32_t>::max()) {
-        context.Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
-        return false;
-    }
-    const auto& numeration = context.GetValueNumeration();
-    const auto& allocation = context.GetRegisterAllocation();
-    auto result = ComputeSafepointLiveness(
-        *context.GetFunction(), numeration, allocation, context.GetLiveness(), expression);
-    if (!result) {
-        context.Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
-        return false;
-    }
-    auto& roots = result.Value();
+    JIT_ASSERT(offset >= 4 && offset - 4 <= std::numeric_limits<uint32_t>::max(),
+        "safepoint program counter is out of range");
+    auto roots = ComputeSafepointLiveness(
+        *context.GetFunction(), context.GetValueNumeration(), context.GetRegisterAllocation(),
+        context.GetLiveness(), expression);
     if (temporaryRoot) {
+        auto& numeration = context.GetValueNumeration();
+        auto& allocation = context.GetRegisterAllocation();
         const auto id = numeration.GetId(temporaryRoot);
-        auto slot = id && *id < allocation.GetLocationCount()
-            ? allocation.GetLocation(*id).AsStack() : nullptr;
-        const auto rootOffset = slot
-            ? StackFrameUtils::GetSlotOffset(slot->index, allocation.GetStackSlotCount()) : std::nullopt;
-        if (!slot || !rootOffset || roots.gcRoots.registers != 0) {
-            context.Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
-            return false;
-        }
+        JIT_ASSERT(id && *id < allocation.GetLocationCount(), "temporary root is numbered");
+        const auto slot = allocation.GetLocation(*id).AsStack();
+        JIT_ASSERT(slot != nullptr, "temporary root occupies a stack slot");
         for (ValueNumeration::Id i = 0; i < allocation.GetLocationCount(); ++i) {
             auto other = allocation.GetLocation(i).AsStack();
-            if ((i != *id && other && other->index == slot->index) ||
-                allocation.GetAllocationSlot(i) == slot->index) {
-                context.Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
-                return false;
-            }
+            JIT_ASSERT(i == *id || !other || other->index != slot->index,
+                "temporary root must not share a slot with a live value");
+            JIT_ASSERT(allocation.GetAllocationSlot(i) != slot->index,
+                "temporary root must not overlap an allocation slot");
         }
+        const auto rootOffset =
+            StackFrameUtils::GetSlotOffset(slot->index, allocation.GetStackSlotCount());
+        JIT_ASSERT(roots.gcRoots.registers == 0, "temporary root requires free GC registers");
         auto position = std::lower_bound(
-            roots.gcRoots.slots.begin(), roots.gcRoots.slots.end(), *rootOffset, std::greater<int32_t>());
+            roots.gcRoots.slots.begin(), roots.gcRoots.slots.end(), rootOffset, std::greater<int32_t>());
         const auto index = position - roots.gcRoots.slots.begin();
-        roots.gcRoots.slots.insert(position, *rootOffset);
+        roots.gcRoots.slots.insert(position, rootOffset);
         roots.derivedRoots.insert(roots.derivedRoots.begin() + index, FunctionMetadata::Roots{});
     }
     if (!context.GetGlobalContext().IsStackGrowthEnabled()) {
@@ -64,6 +54,5 @@ bool SafepointRecorder::Record(const CHIR::Expression& expression, const CHIR::V
     context.GetMetadata().RecordSafepoint(static_cast<uint32_t>(offset - 4),
         roots.gcRoots.registers, std::move(roots.gcRoots.slots),
         roots.stackRoots.registers, std::move(roots.stackRoots.slots), 0, std::move(roots.derivedRoots));
-    return true;
 }
 } // namespace Cangjie::JIT::X86_64

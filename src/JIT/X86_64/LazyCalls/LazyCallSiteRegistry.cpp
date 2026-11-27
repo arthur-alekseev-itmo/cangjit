@@ -6,41 +6,26 @@
 
 #include "LazyCallSiteRegistry.h"
 
-#include "cangjie/Utils/CheckUtils.h"
+#include "../JitAssert.h"
 
 #include <cstdint>
 
 namespace Cangjie::JIT::X86_64 {
-bool LazyCallSiteRegistry::Register(
-    CodeAddress caller, size_t codeSize, const std::vector<PendingLazyCallSite>& pending) noexcept
+void LazyCallSiteRegistry::Register(
+    CodeAddress caller, size_t codeSize, const std::vector<PendingLazyCallSite>& pending)
 {
-    size_t inserted = 0;
-    try {
-        for (const auto& site : pending) {
-            if (!caller || !site.callee || site.returnOffset >= codeSize ||
-                site.immediateOffset > codeSize || codeSize - site.immediateOffset < sizeof(uint64_t)) {
-                break;
-            }
-            const auto [it, published] = sites.emplace(
-                caller + site.returnOffset, LazyCallSite{caller, site.immediateOffset, site.callee});
-            if (!published) {
-                break;
-            }
-            CJC_ASSERT(it->second.caller == caller && it->second.immediateOffset == site.immediateOffset &&
-                it->second.callee == site.callee);
-            ++inserted;
-        }
-    } catch (...) {
-        // Roll back the entries installed for this caller.
+    // Entries are produced by EmitCall, which validates the 13-byte
+    // lazy-call encoding; insertion cannot fail here.
+    for (const auto& site : pending) {
+        JIT_ASSERT(caller != 0 && site.callee != nullptr && site.returnOffset < codeSize &&
+            site.immediateOffset <= codeSize && codeSize - site.immediateOffset >= sizeof(uint64_t),
+            "invalid pending lazy call site");
+        const auto [it, published] =
+            sites.emplace(caller + site.returnOffset, LazyCallSite{caller, site.immediateOffset, site.callee});
+        JIT_ASSERT(published && it->second.caller == caller &&
+            it->second.immediateOffset == site.immediateOffset && it->second.callee == site.callee,
+            "lazy call sites must be distinct per caller");
     }
-    if (inserted == pending.size()) {
-        return true;
-    }
-    for (size_t i = 0; i < inserted; ++i) {
-        const auto erased = sites.erase(caller + pending[i].returnOffset);
-        CJC_ASSERT(erased == 1);
-    }
-    return false;
 }
 
 const LazyCallSite* LazyCallSiteRegistry::Find(CodeAddress returnAddress) const noexcept

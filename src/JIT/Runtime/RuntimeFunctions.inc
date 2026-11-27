@@ -43,65 +43,65 @@ JIT_RUNTIME_FUNCTION(ExceptionWrapper, void*, "CJ_MCC_GetExceptionWrapper", true
 JIT_RUNTIME_FUNCTION(PostThrowException, void*, "CJ_MCC_PostThrowException", true)
 
 // Provides the Cangjie-to-native call stub.
-JIT_RUNTIME_FUNCTION(CangjieToNativeStub, void*, "CJ_MCC_C2NStub", false)
+JIT_RUNTIME_FUNCTION(CangjieToNativeStub, void*, "CJ_MCC_C2NStub", true)
 
 // Looks up type information by mangled name.
-JIT_RUNTIME_FUNCTION(TypeByName, void*, "CJ_MCC_GetTypeByMangledName", false)
+JIT_RUNTIME_FUNCTION(TypeByName, void*, "CJ_MCC_GetTypeByMangledName", true)
 
 // Retrieves or creates type information.
-JIT_RUNTIME_FUNCTION(CreateTypeInfo, void*, "CJ_MCC_GetOrCreateTypeInfo", false)
+JIT_RUNTIME_FUNCTION(CreateTypeInfo, void*, "CJ_MCC_GetOrCreateTypeInfo", true)
 
 // Removes a local finalizer.
-JIT_RUNTIME_FUNCTION(RemoveLocalFinalizer, void*, "CJ_MCC_RemoveLocalFinalizer", false)
+JIT_RUNTIME_FUNCTION(RemoveLocalFinalizer, void*, "CJ_MCC_RemoveLocalFinalizer", true)
 
 // Retrieves the outer type information for a method.
-JIT_RUNTIME_FUNCTION(MethodOuterTypeInfo, void*, "CJ_MCC_GetMethodOuterTI", false)
+JIT_RUNTIME_FUNCTION(MethodOuterTypeInfo, void*, "CJ_MCC_GetMethodOuterTI", true)
 
 // Retrieves the method table for a type.
-JIT_RUNTIME_FUNCTION(MethodTable, void*, "CJ_MCC_GetMTable", false)
+JIT_RUNTIME_FUNCTION(MethodTable, void*, "CJ_MCC_GetMTable", true)
 
 // Updates a type's virtual method table.
-JIT_RUNTIME_FUNCTION(UpdateVTable, void*, "CJ_MCC_UpdateVMT", false)
+JIT_RUNTIME_FUNCTION(UpdateVTable, void*, "CJ_MCC_UpdateVMT", true)
 
 // Checks whether one type is a subtype of another.
-JIT_RUNTIME_FUNCTION(IsSubType, void*, "CJ_MCC_IsSubType", false)
+JIT_RUNTIME_FUNCTION(IsSubType, void*, "CJ_MCC_IsSubType", true)
 
 // Checks whether a type is a tuple type.
-JIT_RUNTIME_FUNCTION(IsTupleTypeOf, void*, "CJ_MCC_IsTupleTypeOf", false)
+JIT_RUNTIME_FUNCTION(IsTupleTypeOf, void*, "CJ_MCC_IsTupleTypeOf", true)
 
 // Allocates an object in the current local region.
-JIT_RUNTIME_FUNCTION(NewLocalObject, void*, "CJ_MCC_NewLocalObject", false)
+JIT_RUNTIME_FUNCTION(NewLocalObject, void*, "CJ_MCC_NewLocalObject", true)
 
 // Creates a finalizer.
-JIT_RUNTIME_FUNCTION(NewFinalizer, void*, "CJ_MCC_NewFinalizer", false)
+JIT_RUNTIME_FUNCTION(NewFinalizer, void*, "CJ_MCC_NewFinalizer", true)
 
 // Allocates a weak reference object in the current local region.
-JIT_RUNTIME_FUNCTION(NewLocalWeakRefObject, void*, "CJ_MCC_NewLocalWeakRefObject", false)
+JIT_RUNTIME_FUNCTION(NewLocalWeakRefObject, void*, "CJ_MCC_NewLocalWeakRefObject", true)
 
 // Allocates a weak reference object.
-JIT_RUNTIME_FUNCTION(NewWeakRefObject, void*, "CJ_MCC_NewWeakRefObject", false)
+JIT_RUNTIME_FUNCTION(NewWeakRefObject, void*, "CJ_MCC_NewWeakRefObject", true)
 
 // Allocates a pinned object.
-JIT_RUNTIME_FUNCTION(NewPinnedObject, void*, "CJ_MCC_NewPinnedObject", false)
+JIT_RUNTIME_FUNCTION(NewPinnedObject, void*, "CJ_MCC_NewPinnedObject", true)
 
 // Allocates an object.
-JIT_RUNTIME_FUNCTION(NewObject, void*, "CJ_MCC_NewObject", false)
+JIT_RUNTIME_FUNCTION(NewObject, void*, "CJ_MCC_NewObject", true)
 
 // Adds a finalizer to a local object.
-JIT_RUNTIME_FUNCTION(AddLocalFinalizer, void*, "CJ_MCC_AddLocalFinalizer", false)
+JIT_RUNTIME_FUNCTION(AddLocalFinalizer, void*, "CJ_MCC_AddLocalFinalizer", true)
 
 // Starts a local allocation region.
-JIT_RUNTIME_FUNCTION(StartLocalRegion, void*, "CJ_MCC_StartLocalRegion", false)
+JIT_RUNTIME_FUNCTION(StartLocalRegion, void*, "CJ_MCC_StartLocalRegion", true)
 
 // Ends a local allocation region.
-JIT_RUNTIME_FUNCTION(EndLocalRegion, void*, "CJ_MCC_EndLocalRegion", false)
+JIT_RUNTIME_FUNCTION(EndLocalRegion, void*, "CJ_MCC_EndLocalRegion", true)
 
 // Retrieves the instance size from type information.
-JIT_RUNTIME_FUNCTION(TypeInstanceSize, void*, "_ZNK12MapleRuntime8TypeInfo15GetInstanceSizeEv", false)
+JIT_RUNTIME_FUNCTION(TypeInstanceSize, void*, "_ZNK12MapleRuntime8TypeInfo15GetInstanceSizeEv", true)
 
 // Creates an overflow exception with a message.
-JIT_RUNTIME_FUNCTION(CreateOverflowException, void*, "rt$CreateOverflowException_msg", false)
+JIT_RUNTIME_FUNCTION(CreateOverflowException, void*, "rt$CreateOverflowException_msg", true)
 
 // Creates an arithmetic exception with a message.
-JIT_RUNTIME_FUNCTION(CreateArithmeticException, void*, "rt$CreateArithmeticException_msg", false)
+JIT_RUNTIME_FUNCTION(CreateArithmeticException, void*, "rt$CreateArithmeticException_msg", true)
 

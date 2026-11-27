@@ -6,39 +6,33 @@
 
 #include "StringLiteralPool.h"
 
+#include "JitRuntimeBindings.h"
+#include "../X86_64/JitAssert.h"
+
 #include <cstring>
 #include <limits>
 #include <utility>
-
-#include "JitRuntimeBindings.h"
 
 namespace Cangjie::JIT::X86_64 {
 StringLiteralPool::StringLiteralPool(JitRuntimeBindings& runtimeBindings) noexcept : runtimeBindings(runtimeBindings) {}
 
 const void* StringLiteralPool::GetOrCreate(std::string_view text)
 {
-    if (text.size() > std::numeric_limits<uint32_t>::max()) {
-        return nullptr;
-    }
+    JIT_ASSERT(text.size() <= std::numeric_limits<uint32_t>::max(), "string literal fits a 32-bit length");
     std::string key(text);
     auto found = literals.find(key);
     if (found != literals.end()) {
         return found->second.data();
     }
     auto typeInfo = GetByteArrayTypeInfo();
-    if (!typeInfo) {
-        return nullptr;
-    }
+    JIT_ASSERT(typeInfo != nullptr, "byte array type information is available");
     return StoreLiteral(std::move(key), typeInfo);
 }
 
 void* StringLiteralPool::GetByteArrayTypeInfo() const
 {
-    auto symbol = runtimeBindings.GetTypeByName();
-    if (!symbol) {
-        return nullptr;
-    }
-    return reinterpret_cast<void* (*)(const char*)>(symbol.Value())("RawArray<UInt8>");
+    using LookupType = void* (*)(const char*);
+    return reinterpret_cast<LookupType>(runtimeBindings.GetTypeByName())("RawArray<UInt8>");
 }
 
 const void* StringLiteralPool::StoreLiteral(std::string text, void* byteArrayTypeInfo)

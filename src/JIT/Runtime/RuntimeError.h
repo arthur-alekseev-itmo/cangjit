@@ -11,10 +11,11 @@
 #include <optional>
 #include <string>
 
+#include "../X86_64/Types.h"
+
 namespace Cangjie::JIT::X86_64 {
 class JitRuntime;
 enum class RuntimeErrorKind {
-    AlreadyInitialized,
     MissingRuntimeConfig,
     EmptyLibraryPath,
     EmptyLibraryBasename,
@@ -24,14 +25,11 @@ enum class RuntimeErrorKind {
     InitializationFailed,
     LibraryLoadFailed,
     PackageLibraryNotFound,
-    NotInitialized,
-    InvalidSymbolName,
     SymbolNotFound,
-    FinalizationSymbolMissing,
     FinalizationFailed,
-    UnloadSymbolMissing,
     LibraryUnloadFailed,
     RuntimeCloseFailed,
+    OutOfMemory,
 };
 
 struct RuntimeFailure {
@@ -51,6 +49,24 @@ struct RuntimeError {
 
 const char* GetRuntimeErrorMessage(RuntimeErrorKind kind) noexcept;
 std::string FormatRuntimeError(const RuntimeError& error);
+
+// Imported package, symbol and template lookups fail on the environment, not
+// on a JIT bug; their failures cross the compilation boundary as exceptions.
+inline void Require(const Result<void, RuntimeError>& result)
+{
+    if (!result) {
+        throw result.Error();
+    }
+}
+
+template<typename T>
+T Require(const Result<T, RuntimeError>& result)
+{
+    if (!result) {
+        throw result.Error();
+    }
+    return result.Value();
+}
 } // namespace Cangjie::JIT::X86_64
 
 #endif // CANGJIE_JIT_X86_64_RUNTIME_ERROR_H

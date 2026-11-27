@@ -6,6 +6,8 @@
 
 #include "BinaryUtils.h"
 
+#include "../X86_64/JitAssert.h"
+
 namespace Cangjie::JIT::X86_64::BinaryUtils {
 void AppendU32LE(std::vector<uint8_t>& output, uint32_t value)
 {
@@ -21,15 +23,13 @@ void AppendU64LE(std::vector<uint8_t>& output, uint64_t value)
     }
 }
 
-bool PatchU32LE(std::vector<uint8_t>& output, size_t offset, uint32_t value)
+void PatchU32LE(std::vector<uint8_t>& output, size_t offset, uint32_t value)
 {
-    if (offset > output.size() || output.size() - offset < sizeof(value)) {
-        return false;
-    }
+    JIT_ASSERT(offset <= output.size() && output.size() - offset >= sizeof(value),
+        "descriptor patch offset is out of range");
     for (unsigned i = 0; i < sizeof(value); ++i) {
         output[offset + i] = static_cast<uint8_t>(value >> (i * 8));
     }
-    return true;
 }
 
 void AppendULEB128(std::vector<uint8_t>& output, uint64_t value)

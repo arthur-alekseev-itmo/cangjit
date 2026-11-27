@@ -8,6 +8,7 @@
 
 #include "../../Utils/MemoryUtils.h"
 #include "../../Utils/RegisterUtils.h"
+#include "../../JitAssert.h"
 #include "../Context/FunctionContext.h"
 #include "cangjie/CHIR/IR/Expression/Terminator.h"
 #include "cangjie/CHIR/IR/Type/Type.h"
@@ -19,15 +20,11 @@ void CompileBranch::Compile(FunctionContext& ctx, const CHIR::Branch& expr)
     auto condition = expr.GetCondition();
     auto trueBlock = expr.GetTrueBlock();
     auto falseBlock = expr.GetFalseBlock();
-    if (!condition || !condition->GetType() || !condition->GetType()->IsBoolean() || !trueBlock || !falseBlock) {
-        ctx.Fail(JitFailureKind::InvalidBranch);
-        return;
-    }
+    JIT_ASSERT(condition && condition->GetType() && condition->GetType()->IsBoolean() && trueBlock && falseBlock,
+        "Branch requires a boolean condition and two destinations");
     const auto source = ctx.GetValueLocation(condition);
     const auto destination = RegisterUtils::ToLocation(asmjit::x86::rax);
-    if (!MemoryUtils::Move(ctx, destination, *source, *condition->GetType(), asmjit::x86::r11)) {
-        return;
-    }
+    MemoryUtils::Move(ctx, destination, *source, *condition->GetType(), asmjit::x86::r11);
     auto& assembler = ctx.GetAssembler();
     assembler.test(asmjit::x86::rax, asmjit::x86::rax);
     assembler.jnz(ctx.GetBlockLabel(trueBlock));

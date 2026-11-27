@@ -6,11 +6,11 @@
 
 #include "LivenessInterferenceGraphBuilder.h"
 
+#include "../JitAssert.h"
 #include "Liveness.h"
 #include "ValueNumeration.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
-#include "cangjie/Utils/CheckUtils.h"
 
 namespace Cangjie::JIT::X86_64 {
 namespace {
@@ -65,11 +65,8 @@ InterferenceGraph LivenessInterferenceGraphBuilder::Build(const CHIR::Function& 
             }
         }
     }
-    const auto entry = liveness.GetBlockIndex(function.GetBody()->GetEntryBlock());
-    CJC_ASSERT(entry.has_value());
-    if (entry) {
-        AddClique(graph, liveness.GetLiveIn(function.GetBody()->GetEntryBlock()), wordCount, nodeCount);
-    }
+    // CollectBlocks indexes every block of the body, including the entry.
+    AddClique(graph, liveness.GetLiveIn(function.GetBody()->GetEntryBlock()), wordCount, nodeCount);
     return graph;
 }
 } // namespace Cangjie::JIT::X86_64

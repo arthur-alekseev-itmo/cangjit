@@ -11,6 +11,8 @@
 
 #include "FunctionContext.h"
 #include "GlobalContext.h"
+#include "../../JitAssert.h"
+#include "../../../Runtime/RuntimeError.h"
 #include "../../Utils/StackFrameUtils.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
 #include "cangjie/CHIR/IR/Type/ClassDef.h"
@@ -18,68 +20,45 @@
 #include "cangjie/Mangle/CHIRTypeManglingUtils.h"
 
 namespace Cangjie::JIT::X86_64 {
-std::optional<std::vector<uintptr_t>> ExceptionLandingEmitter::GetExceptionTypes(const CHIR::Block& block)
+std::vector<uintptr_t> ExceptionLandingEmitter::GetExceptionTypes(const CHIR::Block& block)
 {
     const auto exceptions = block.GetExceptions();
     if (exceptions.empty()) {
-        return std::vector<uintptr_t>{0};
+        return {0};
     }
     auto& bindings = context.GetGlobalContext().GetRuntimeBindings();
-    auto symbol = bindings.GetTypeByName();
-    if (!symbol) {
-        context.Fail(JitFailureKind::UnresolvedSymbol);
-        return std::nullopt;
-    }
     using LookupType = void* (*)(const char*);
-    const auto lookup = reinterpret_cast<LookupType>(symbol.Value());
+    const auto lookup = reinterpret_cast<LookupType>(bindings.GetTypeByName());
     std::vector<uintptr_t> types;
     types.reserve(exceptions.size());
     for (auto type : exceptions) {
-        if (!type) {
-            context.Fail(JitFailureKind::UnsupportedExpression);
-            return std::nullopt;
-        }
+        JIT_ASSERT(type != nullptr, "exception type is required");
         auto def = type->GetClassDef();
-        if (!def || !bindings.EnsurePackage(def->GetPackageName())) {
-            context.Fail(JitFailureKind::UnresolvedSymbol);
-            return std::nullopt;
-        }
+        JIT_ASSERT(def != nullptr, "exception type has a class definition");
+        Require(bindings.EnsurePackage(def->GetPackageName()));
         const auto name = CHIR::GetTypeQualifiedName(*type, true);
         auto info = lookup(name.c_str());
-        if (!info) {
-            context.Fail(JitFailureKind::UnresolvedSymbol);
-            return std::nullopt;
-        }
+        JIT_ASSERT(info != nullptr, "exception type information is missing from loaded libraries");
         types.push_back(reinterpret_cast<uintptr_t>(info));
     }
     return types;
 }
 
-bool ExceptionLandingEmitter::Emit(const CHIR::Block& block, size_t callStart, size_t callEnd)
+void ExceptionLandingEmitter::Emit(const CHIR::Block& block, size_t callStart, size_t callEnd)
 {
     auto& assembler = context.GetAssembler();
     const auto landingOffset = assembler.offset();
-    if (!block.IsLandingPadBlock() || callStart < 4 || callEnd <= callStart ||
-        callEnd - 4 > std::numeric_limits<uint32_t>::max() ||
-        landingOffset < 4 || landingOffset - 4 > std::numeric_limits<uint32_t>::max()) {
-        context.Fail(JitFailureKind::UnsupportedExpression);
-        return false;
-    }
+    JIT_ASSERT(block.IsLandingPadBlock() && callStart >= 4 && callEnd > callStart &&
+        callEnd - 4 <= std::numeric_limits<uint32_t>::max() &&
+        landingOffset >= 4 && landingOffset - 4 <= std::numeric_limits<uint32_t>::max(),
+        "landing pad or call site is out of range");
     auto types = GetExceptionTypes(block);
-    if (!types) {
-        return false;
-    }
     const auto slots = context.GetRegisterAllocation().GetStackSlotCount();
     const auto frameSize = StackFrameUtils::GetFrameSize(slots + 1);
-    if (!frameSize) {
-        context.Fail(JitFailureKind::StackFrameTooLarge);
-        return false;
-    }
     auto& metadata = context.GetMetadata();
-    const auto landing = metadata.RecordLandingPad(static_cast<uint32_t>(landingOffset - 4), std::move(*types));
+    const auto landing = metadata.RecordLandingPad(static_cast<uint32_t>(landingOffset - 4), std::move(types));
     metadata.RecordCallSite(static_cast<uint32_t>(callStart - 4), static_cast<uint32_t>(callEnd - callStart), landing);
-    assembler.lea(asmjit::x86::rsp, asmjit::x86::ptr(asmjit::x86::rbp, -static_cast<int32_t>(*frameSize)));
+    assembler.lea(asmjit::x86::rsp, asmjit::x86::ptr(asmjit::x86::rbp, -static_cast<int32_t>(frameSize)));
     assembler.jmp(context.GetBlockLabel(&block));
-    return context.GetError() == asmjit::kErrorOk;
 }
 } // namespace Cangjie::JIT::X86_64

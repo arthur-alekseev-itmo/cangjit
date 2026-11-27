@@ -7,9 +7,9 @@
 #include "FunctionContext.h"
 
 #include "GlobalContext.h"
+#include "../../JitAssert.h"
 #include "../../Utils/StackFrameUtils.h"
 
-#include <cassert>
 #include <utility>
 
 #include "cangjie/CHIR/IR/Value/Value.h"
@@ -25,13 +25,12 @@ FunctionContext::FunctionContext(GlobalContext& globalContext, const CHIR::Funct
       liveness(std::move(liveness)),
       registerAllocation(std::move(registerAllocation))
 {
-    assert(function != nullptr);
 }
 
-bool FunctionContext::Prepare()
+void FunctionContext::Prepare()
 {
     ReserveHiddenTypeInfoSlots();
-    return InitializeAssembler();
+    InitializeAssembler();
 }
 
 void FunctionContext::ReserveHiddenTypeInfoSlots() noexcept
@@ -42,24 +41,16 @@ void FunctionContext::ReserveHiddenTypeInfoSlots() noexcept
     hiddenTypeInfoBase = registerAllocation.ReserveStackSlots(hiddenTypeInfoCount);
 }
 
-bool FunctionContext::InitializeAssembler()
+void FunctionContext::InitializeAssembler()
 {
     error = code.init(globalContext.GetRuntime().environment());
-    if (error != asmjit::kErrorOk) {
-        return false;
-    }
+    JIT_ASSERT(error == asmjit::kErrorOk, "cannot initialize code holder");
     globalContext.GetLogger().AttachAssemblyLogger(code, function->GetIdentifier());
     code.setErrorHandler(&emitterErrorHandler);
     error = code.attach(&assembler);
-    if (error != asmjit::kErrorOk) {
-        return false;
-    }
+    JIT_ASSERT(error == asmjit::kErrorOk, "cannot attach assembler");
     epilogueLabel = assembler.newLabel();
-    if (!epilogueLabel.isValid()) {
-        Fail(JitFailureKind::EpilogueLabelCreationFailed);
-        return false;
-    }
-    return true;
+    JIT_ASSERT(epilogueLabel.isValid(), "failed to create epilogue label");
 }
 
 GlobalContext& FunctionContext::GetGlobalContext() const noexcept
@@ -81,11 +72,9 @@ FunctionMetadata& FunctionContext::GetMetadata() noexcept
     return metadata;
 }
 
-std::optional<int32_t> FunctionContext::GetHiddenTypeInfoOffset(size_t index) const noexcept
+int32_t FunctionContext::GetHiddenTypeInfoOffset(size_t index) const noexcept
 {
-    if (index >= hiddenTypeInfoCount) {
-        return std::nullopt;
-    }
+    JIT_ASSERT(index < hiddenTypeInfoCount, "hidden type information slot is out of range");
     return StackFrameUtils::GetSlotOffset(hiddenTypeInfoBase + index, registerAllocation.GetStackSlotCount());
 }
 
@@ -96,19 +85,13 @@ asmjit::Error FunctionContext::GetError() const noexcept
 
 asmjit::Label FunctionContext::GetBlockLabel(const CHIR::Block* block)
 {
-    if (!block) {
-        Fail(JitFailureKind::MissingBranchDestination);
-        return {};
-    }
+    JIT_ASSERT(block != nullptr, "block destination is required");
     auto found = blockLabels.find(block);
     if (found != blockLabels.end()) {
         return found->second;
     }
     auto label = assembler.newLabel();
-    if (!label.isValid()) {
-        Fail(JitFailureKind::BlockLabelCreationFailed);
-        return label;
-    }
+    JIT_ASSERT(label.isValid(), "failed to create block label");
     blockLabels.emplace(block, label);
     return label;
 }
@@ -116,18 +99,6 @@ asmjit::Label FunctionContext::GetBlockLabel(const CHIR::Block* block)
 asmjit::Label FunctionContext::GetEpilogueLabel() const noexcept
 {
     return epilogueLabel;
-}
-
-void FunctionContext::Fail(JitFailureKind kind, std::optional<CHIR::ExprKind> expressionKind) noexcept
-{
-    if (!failure) {
-        failure = JitFailure{kind, expressionKind};
-    }
-}
-
-const std::optional<JitFailure>& FunctionContext::GetFailure() const noexcept
-{
-    return failure;
 }
 
 const CHIR::Function* FunctionContext::GetFunction() const noexcept
@@ -155,7 +126,7 @@ const RegisterAllocation& FunctionContext::GetRegisterAllocation() const noexcep
 const Location* FunctionContext::GetValueLocation(const CHIR::Value* value) noexcept
 {
     const auto id = valueNumeration.GetId(value);
-    CJC_ASSERT(id);
+    JIT_ASSERT(id, "value is missing from the numeration");
     return &registerAllocation.GetLocation(*id);
 }
 

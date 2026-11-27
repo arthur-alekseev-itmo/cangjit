@@ -6,6 +6,7 @@
 
 #include "JitRuntimeBindings.h"
 #include "../X86_64/Compilers/Context/Logger.h"
+#include "../X86_64/JitAssert.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -83,9 +84,7 @@ std::optional<std::string> FindLibraryInEnvironment(const std::string& name)
 
 BindingResult JitRuntimeBindings::Initialize(const RuntimeConfig& config)
 {
-    if (runtime != nullptr) {
-        return BindingResult::Failure({RuntimeErrorKind::AlreadyInitialized});
-    }
+    JIT_ASSERT(runtime == nullptr, "runtime bindings are already initialized");
     const auto& [runtimePath, requestedLibraries, params, owner, stackGrowth, imports, searchPaths] = config;
     // This is a host assertion, not a runtime switch. Consumers must pass the
     // same value to the metadata encoder; no public query exposes the mode.
@@ -177,7 +176,7 @@ BindingResult JitRuntimeBindings::LoadRuntime(const std::string& runtimePath)
 BindingResult JitRuntimeBindings::LoadRequiredSymbols()
 {
 #define JIT_RUNTIME_FUNCTION(name, type, symbol, required) \
-    if (required) { \
+    { \
         dlerror(); \
         void* address = dlsym(runtime, symbol); \
         const char* error = dlerror(); \
@@ -265,9 +264,7 @@ std::optional<std::string> JitRuntimeBindings::FindPackageLibrary(const std::str
 
 BindingResult JitRuntimeBindings::EnsurePackage(std::string_view package)
 {
-    if (!initialized) {
-        return BindingResult::Failure({RuntimeErrorKind::NotInitialized});
-    }
+    JIT_ASSERT(initialized, "package lookup requires initialized runtime bindings");
     for (const auto& name : PackageLibraryNames(package)) {
         if (IsLibraryLoaded(name)) {
             return BindingResult::Success();
@@ -281,12 +278,8 @@ BindingResult JitRuntimeBindings::EnsurePackage(std::string_view package)
 
 SymbolResult JitRuntimeBindings::Resolve(SymbolName name)
 {
-    if (!initialized) {
-        return SymbolResult::Failure({RuntimeErrorKind::NotInitialized});
-    }
-    if (name.empty() || name.find('\0') != SymbolName::npos) {
-        return SymbolResult::Failure({RuntimeErrorKind::InvalidSymbolName});
-    }
+    JIT_ASSERT(initialized, "symbol resolution requires initialized runtime bindings");
+    JIT_ASSERT(!name.empty() && name.find('\0') == SymbolName::npos, "invalid symbol name");
     std::string key(name);
     auto existing = symbols.find(key);
     if (existing != symbols.end()) {
@@ -311,20 +304,10 @@ SymbolResult JitRuntimeBindings::Resolve(SymbolName name)
 }
 
 #define JIT_RUNTIME_FUNCTION(name, type, symbol, required) \
-    Result<type, RuntimeError> JitRuntimeBindings::Get##name() \
+    type JitRuntimeBindings::Get##name() const noexcept \
     { \
-        if (!initialized) { \
-            return Result<type, RuntimeError>::Failure({RuntimeErrorKind::NotInitialized}); \
-        } \
-        if (name) { \
-            return Result<type, RuntimeError>::Success(name); \
-        } \
-        auto result = Resolve(symbol); \
-        if (!result) { \
-            return Result<type, RuntimeError>::Failure(std::move(result).Error()); \
-        } \
-        name = reinterpret_cast<type>(result.Value()); \
-        return Result<type, RuntimeError>::Success(name); \
+        JIT_ASSERT(name != nullptr, "runtime symbol " symbol " is used after Close"); \
+        return name; \
     }
 #include "RuntimeFunctions.inc"
 #undef JIT_RUNTIME_FUNCTION
@@ -332,7 +315,6 @@ SymbolResult JitRuntimeBindings::Resolve(SymbolName name)
 const char* GetRuntimeErrorMessage(RuntimeErrorKind kind) noexcept
 {
     switch (kind) {
-        case RuntimeErrorKind::AlreadyInitialized: return "runtime bindings are already initialized or could not be shut down";
         case RuntimeErrorKind::MissingRuntimeConfig: return "a runtime library path and owner runtime parameters are required";
         case RuntimeErrorKind::EmptyLibraryPath: return "native library path is empty";
         case RuntimeErrorKind::EmptyLibraryBasename: return "native library basename is empty";
@@ -342,14 +324,11 @@ const char* GetRuntimeErrorMessage(RuntimeErrorKind kind) noexcept
         case RuntimeErrorKind::InitializationFailed: return "InitCJRuntime failed";
         case RuntimeErrorKind::LibraryLoadFailed: return "LoadCJLibraryWithInit failed";
         case RuntimeErrorKind::PackageLibraryNotFound: return "package shared library not found";
-        case RuntimeErrorKind::NotInitialized: return "runtime bindings are not initialized";
-        case RuntimeErrorKind::InvalidSymbolName: return "invalid symbol name";
         case RuntimeErrorKind::SymbolNotFound: return "symbol not found";
-        case RuntimeErrorKind::FinalizationSymbolMissing: return "runtime finalization symbol is missing";
         case RuntimeErrorKind::FinalizationFailed: return "runtime finalization failed";
-        case RuntimeErrorKind::UnloadSymbolMissing: return "library unload symbol is missing";
         case RuntimeErrorKind::LibraryUnloadFailed: return "library unload failed";
         case RuntimeErrorKind::RuntimeCloseFailed: return "runtime library close failed";
+        case RuntimeErrorKind::OutOfMemory: return "out of memory";
         default: return "unknown runtime error";
     }
 }
@@ -412,9 +391,7 @@ Result<void, RuntimeError> JitRuntimeBindings::FinalizeRuntime()
     if (!ownsRuntime) {
         return Result<void, RuntimeError>::Success();
     }
-    if (!FiniRuntime) {
-        return Result<void, RuntimeError>::Failure({RuntimeErrorKind::FinalizationSymbolMissing, 0, {}});
-    }
+    JIT_ASSERT(FiniRuntime != nullptr, "runtime finalization symbol is missing");
     const auto code = FiniRuntime();
     if (code != 0) {
         return Result<void, RuntimeError>::Failure({RuntimeErrorKind::FinalizationFailed, code, {}});
@@ -427,9 +404,7 @@ Result<void, RuntimeError> JitRuntimeBindings::UnloadLibraries()
 {
     // Keep library TypeInfos mapped until the owned runtime has stopped its collector.
     while (!libraries.empty()) {
-        if (!UnloadLibrary) {
-            return Result<void, RuntimeError>::Failure({RuntimeErrorKind::UnloadSymbolMissing, 0, libraries.back()});
-        }
+        JIT_ASSERT(UnloadLibrary != nullptr, "library unload symbol is missing");
         const auto code = UnloadLibrary(libraries.back().c_str());
         if (code != 0) {
             return Result<void, RuntimeError>::Failure({RuntimeErrorKind::LibraryUnloadFailed, code, libraries.back()});

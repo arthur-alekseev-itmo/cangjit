@@ -10,7 +10,6 @@
 #include <cstdint>
 #include <iosfwd>
 #include <memory>
-#include <optional>
 #include <string_view>
 #include <string>
 #include <vector>
@@ -46,7 +45,7 @@ private:
     static bool ReportError(std::ostream& output, std::string_view message);
 
     bool ConfigureRuntime(std::ostream& output) const;
-    std::optional<std::uintptr_t> CompileUserMain(const CHIR::Function& function, std::ostream& output) const;
+    std::uintptr_t CompileUserMain(const CHIR::Function& function) const;
     void RunUserMain(std::uintptr_t address, std::ostream& output) const;
 
     std::vector<std::string> importPaths;

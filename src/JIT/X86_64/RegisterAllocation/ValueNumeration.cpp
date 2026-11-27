@@ -6,10 +6,11 @@
 
 #include "ValueNumeration.h"
 
-#include <cassert>
 #include <limits>
 #include <ostream>
 #include <utility>
+
+#include "../JitAssert.h"
 
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
@@ -23,13 +24,13 @@ ValueNumeration::ValueNumeration(std::vector<const CHIR::Value*> numberedValues,
       valueToId(),
       idToValue(std::move(numberedValues))
 {
-    assert(idToValue.size() <= std::numeric_limits<Id>::max());
-    assert(parameterCount <= endOffset);
+    JIT_ASSERT(idToValue.size() <= std::numeric_limits<Id>::max() && parameterCount <= endOffset,
+        "value identifiers fit the numeration");
     valueToId.reserve(idToValue.size());
     for (size_t index = 0; index < idToValue.size(); ++index) {
-        const bool inserted = valueToId.emplace(idToValue[index], static_cast<Id>(index)).second;
-        assert(inserted);
-        (void)inserted;
+        // ValueNumerator numbers each value once.
+        JIT_ASSERT(valueToId.emplace(idToValue[index], static_cast<Id>(index)).second,
+            "numbered values are unique");
     }
 }
 
@@ -54,7 +55,7 @@ std::optional<ValueNumeration::Id> ValueNumeration::GetId(const CHIR::LocalVar* 
 
 const CHIR::Value* ValueNumeration::GetValue(Id id) const noexcept
 {
-    assert(id < endOffset);
+    JIT_ASSERT(id < endOffset, "value identifier is in range");
     return idToValue[id];
 }
 
@@ -91,10 +92,11 @@ ValueNumerator::ValueNumerator(const CHIR::Function& function) noexcept : functi
 ValueNumeration ValueNumerator::Run() const
 {
     auto body = function.GetBody();
-    assert(body != nullptr);
+    JIT_ASSERT(body != nullptr, "numbered function has a body");
 
     const auto& parameters = function.GetParams();
-    assert(parameters.size() <= std::numeric_limits<ValueNumeration::Id>::max());
+    JIT_ASSERT(parameters.size() <= std::numeric_limits<ValueNumeration::Id>::max(),
+        "parameter identifiers fit the numeration");
 
     std::vector<const CHIR::Value*> numberedValues;
     numberedValues.reserve(parameters.size() + function.GetExpressionsNum());
@@ -111,7 +113,8 @@ ValueNumeration ValueNumerator::Run() const
         }
     }
 
-    assert(numberedValues.size() <= std::numeric_limits<ValueNumeration::Id>::max());
+    JIT_ASSERT(numberedValues.size() <= std::numeric_limits<ValueNumeration::Id>::max(),
+        "value identifiers fit the numeration");
     return ValueNumeration(std::move(numberedValues), static_cast<ValueNumeration::Id>(parameters.size()));
 }
 

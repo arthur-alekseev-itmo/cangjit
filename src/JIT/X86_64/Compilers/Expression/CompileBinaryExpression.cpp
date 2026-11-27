@@ -10,8 +10,8 @@
 #include "../Context/GlobalContext.h"
 #include "../Context/FunctionContext.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
+#include "../../JitAssert.h"
 #include "cangjie/CHIR/IR/Type/Type.h"
-#include "cangjie/Utils/CheckUtils.h"
 
 #include <cstdint>
 
@@ -89,36 +89,27 @@ void EmitArithmeticException(FunctionContext& ctx, const CHIR::Expression& expr,
     const CHIR::Block* unwind, const char* message, bool overflow)
 {
     auto& global = ctx.GetGlobalContext();
+    JIT_ASSERT(expr.GetResult() != nullptr, "arithmetic exception is raised from a valued expression");
     auto literal = global.GetStringLiteralPool().GetOrCreate(message);
     auto factory = overflow ? global.GetRuntimeBindings().GetCreateOverflowException()
                             : global.GetRuntimeBindings().GetCreateArithmeticException();
     auto thrower = global.GetRuntimeBindings().GetThrowException();
-    if (!literal || !factory || !thrower || !expr.GetResult()) {
-        ctx.Fail(JitFailureKind::UnresolvedSymbol, expr.GetExprKind());
-        return;
-    }
     auto& a = ctx.GetAssembler();
     a.long_().mov(asmjit::x86::rdi, asmjit::imm(reinterpret_cast<uintptr_t>(literal)));
-    a.long_().mov(asmjit::x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(factory.Value())));
+    a.long_().mov(asmjit::x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(factory)));
     const auto factoryStart = a.offset();
     a.call(asmjit::x86::r11);
     const auto factoryEnd = a.offset();
-    if (!ctx.GetSafepointRecorder().Record(expr)) {
-        return;
-    }
+    ctx.GetSafepointRecorder().Record(expr);
     auto resultLocation = ctx.GetValueLocation(expr.GetResult());
-    if (!MemoryUtils::Move(ctx, *resultLocation, RegisterUtils::ToLocation(asmjit::x86::rax),
-        *expr.GetResult()->GetType(), asmjit::x86::r11)) {
-        return;
-    }
+    MemoryUtils::Move(ctx, *resultLocation, RegisterUtils::ToLocation(asmjit::x86::rax),
+        *expr.GetResult()->GetType(), asmjit::x86::r11);
     a.mov(asmjit::x86::rdi, asmjit::x86::rax);
-    a.long_().mov(asmjit::x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(thrower.Value())));
+    a.long_().mov(asmjit::x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(thrower)));
     const auto throwStart = a.offset();
     a.call(asmjit::x86::r11);
     const auto throwEnd = a.offset();
-    if (!ctx.GetSafepointRecorder().Record(expr, expr.GetResult())) {
-        return;
-    }
+    ctx.GetSafepointRecorder().Record(expr, expr.GetResult());
     a.ud2();
     if (unwind) {
         ctx.GetExceptionLandingEmitter().Emit(*unwind, factoryStart, factoryEnd);
@@ -140,7 +131,7 @@ void EmitFloatComparison(asmjit::x86::Assembler& a, CHIR::BinaryExprKind kind, b
         case K::LE: a.setbe(al); break;
         case K::GT: a.seta(al); break;
         case K::GE: a.setae(al); break;
-        default: CJC_ASSERT(false); return;
+        default: JIT_FAIL("float comparison kind is supported");
     }
     // Unordered comparisons are true only for !=.
     if (kind == K::NOTEQUAL) {
@@ -162,7 +153,7 @@ void EmitFloatArithmetic(asmjit::x86::Assembler& a, CHIR::BinaryExprKind kind, b
         case K::SUB: if (single) a.subss(xmm0, xmm1); else a.subsd(xmm0, xmm1); break;
         case K::MUL: if (single) a.mulss(xmm0, xmm1); else a.mulsd(xmm0, xmm1); break;
         case K::DIV: if (single) a.divss(xmm0, xmm1); else a.divsd(xmm0, xmm1); break;
-        default: CJC_ASSERT(false); break;
+        default: JIT_FAIL("float arithmetic kind is supported");
     }
 }
 
@@ -173,37 +164,28 @@ void CompileFloatBinary(FunctionContext& ctx, const CHIR::BinaryExpressionBase& 
     const auto kind = expr.GetOpKind();
     const bool comparison = kind == K::LT || kind == K::GT || kind == K::LE || kind == K::GE ||
         kind == K::EQUAL || kind == K::NOTEQUAL;
-    if (!comparison && kind != K::ADD && kind != K::SUB && kind != K::MUL && kind != K::DIV) {
-        ctx.Fail(JitFailureKind::UnsupportedBinaryOperation);
-        return;
-    }
+    JIT_ASSERT(comparison || kind == K::ADD || kind == K::SUB || kind == K::MUL || kind == K::DIV,
+        "float binary operation is an arithmetic or comparison kind");
     auto lhsLocation = ctx.GetValueLocation(expr.GetLHSOperand());
     auto rhsLocation = ctx.GetValueLocation(expr.GetRHSOperand());
-    if (
-        !MemoryUtils::Move(ctx, RegisterUtils::ToLocation(asmjit::x86::xmm0), *lhsLocation,
-            *expr.GetLHSOperand()->GetType(), asmjit::x86::rax) ||
-        !MemoryUtils::Move(ctx, RegisterUtils::ToLocation(asmjit::x86::xmm1), *rhsLocation,
-            *expr.GetRHSOperand()->GetType(), asmjit::x86::rax)) {
-        return;
-    }
+    MemoryUtils::Move(ctx, RegisterUtils::ToLocation(asmjit::x86::xmm0), *lhsLocation,
+        *expr.GetLHSOperand()->GetType(), asmjit::x86::rax);
+    MemoryUtils::Move(ctx, RegisterUtils::ToLocation(asmjit::x86::xmm1), *rhsLocation,
+        *expr.GetRHSOperand()->GetType(), asmjit::x86::rax);
     auto& a = ctx.GetAssembler();
     const bool single = expr.GetLHSOperand()->GetType()->GetTypeKind() == CHIR::Type::TYPE_FLOAT32;
     if (comparison) {
         EmitFloatComparison(a, kind, single);
         auto resultLocation = ctx.GetValueLocation(expr.GetResult());
-        if (!MemoryUtils::Move(ctx, *resultLocation, RegisterUtils::ToLocation(asmjit::x86::rax),
-            *expr.GetResult()->GetType(), asmjit::x86::r11)) {
-            return;
-        }
+        MemoryUtils::Move(ctx, *resultLocation, RegisterUtils::ToLocation(asmjit::x86::rax),
+            *expr.GetResult()->GetType(), asmjit::x86::r11);
     } else {
         EmitFloatArithmetic(a, kind, single);
         auto resultLocation = ctx.GetValueLocation(expr.GetResult());
-        if (!MemoryUtils::Move(ctx, *resultLocation,
-            RegisterUtils::ToLocation(asmjit::x86::xmm0), *expr.GetResult()->GetType(), asmjit::x86::rax)) {
-            return;
-        }
+        MemoryUtils::Move(ctx, *resultLocation,
+            RegisterUtils::ToLocation(asmjit::x86::xmm0), *expr.GetResult()->GetType(), asmjit::x86::rax);
     }
-    if (normal && !ctx.GetFailure()) {
+    if (normal) {
         a.jmp(ctx.GetBlockLabel(normal));
     }
 }
@@ -217,10 +199,8 @@ void CompileBinaryExpression::Compile(FunctionContext& ctx, const CHIR::BinaryEx
     auto lhs = expr.GetLHSOperand();
     auto rhs = expr.GetRHSOperand();
     auto result = expr.GetResult();
-    if (!lhs || !rhs || !result || !lhs->GetType() || !rhs->GetType() || !result->GetType()) {
-        ctx.Fail(JitFailureKind::MissingBinaryOperandOrType);
-        return;
-    }
+    JIT_ASSERT(lhs && rhs && result && lhs->GetType() && rhs->GetType() && result->GetType(),
+        "binary expression has operands and a typed result");
     auto type = lhs->GetType();
     const auto kind = expr.GetOpKind();
     const auto width = TypeUtils::IntegerWidth(*type);
@@ -232,39 +212,30 @@ void CompileBinaryExpression::Compile(FunctionContext& ctx, const CHIR::BinaryEx
         kind == K::DIV || kind == K::MOD;
     const bool bitwise = kind == K::BITAND || kind == K::BITOR || kind == K::BITXOR;
     const bool logical = kind == K::AND || kind == K::OR;
-    if ((!shift && type->GetTypeKind() != rhs->GetType()->GetTypeKind()) ||
-        (comparison || logical ? !result->GetType()->IsBoolean() :
-            result->GetType()->GetTypeKind() != type->GetTypeKind())) {
-        ctx.Fail(JitFailureKind::IncompatibleBinaryTypes);
-        return;
-    }
+    JIT_ASSERT((shift || type->GetTypeKind() == rhs->GetType()->GetTypeKind()) &&
+        ((comparison || logical) ? result->GetType()->IsBoolean() :
+            result->GetType()->GetTypeKind() == type->GetTypeKind()),
+        "binary expression has compatible operand and result types");
     if (TypeUtils::IsFloating(*type)) {
         CompileFloatBinary(ctx, expr, normal);
         return;
     }
-    if ((!width && !boolean) || (arithmetic && !width) || (bitwise && !width) ||
-        (shift && (!width || !rhsWidth)) || (logical && !boolean) ||
-        (comparison && boolean && kind != K::EQUAL && kind != K::NOTEQUAL) ||
-        !(arithmetic || bitwise || comparison || logical || shift)) {
-        ctx.Fail(JitFailureKind::UnsupportedBinaryOperation);
-        return;
-    }
-    if (arithmetic && expr.GetOverflowStrategy() != OverflowStrategy::NA &&
-        expr.GetOverflowStrategy() != OverflowStrategy::WRAPPING &&
-        expr.GetOverflowStrategy() != OverflowStrategy::SATURATING &&
-        expr.GetOverflowStrategy() != OverflowStrategy::THROWING) {
-        ctx.Fail(JitFailureKind::UnsupportedBinaryOverflow);
-        return;
-    }
+    JIT_ASSERT((width || boolean) && (!arithmetic || width) && (!bitwise || width) &&
+        (!shift || (width && rhsWidth)) && (!logical || boolean) &&
+        (!(comparison && boolean) || kind == K::EQUAL || kind == K::NOTEQUAL) &&
+        (arithmetic || bitwise || comparison || logical || shift),
+        "binary operation and operand types are supported");
+    JIT_ASSERT(!arithmetic || expr.GetOverflowStrategy() == OverflowStrategy::NA ||
+        expr.GetOverflowStrategy() == OverflowStrategy::WRAPPING ||
+        expr.GetOverflowStrategy() == OverflowStrategy::SATURATING ||
+        expr.GetOverflowStrategy() == OverflowStrategy::THROWING,
+        "binary arithmetic overflow strategy is supported");
     auto lhsLocation = ctx.GetValueLocation(lhs);
     auto rhsLocation = ctx.GetValueLocation(rhs);
-    if (
-        !MemoryUtils::Move(ctx, RegisterUtils::ToLocation(asmjit::x86::rax), *lhsLocation, *lhs->GetType(),
-            asmjit::x86::r11) ||
-        !MemoryUtils::Move(ctx, RegisterUtils::ToLocation(asmjit::x86::rcx), *rhsLocation, *rhs->GetType(),
-            asmjit::x86::r11)) {
-        return;
-    }
+    MemoryUtils::Move(ctx, RegisterUtils::ToLocation(asmjit::x86::rax), *lhsLocation, *lhs->GetType(),
+        asmjit::x86::r11);
+    MemoryUtils::Move(ctx, RegisterUtils::ToLocation(asmjit::x86::rcx), *rhsLocation, *rhs->GetType(),
+        asmjit::x86::r11);
     auto& a = ctx.GetAssembler();
     if (width) {
         TypeUtils::NormalizeInteger(a, asmjit::x86::rax, width, type->IsSignedInteger());
@@ -357,7 +328,7 @@ void CompileBinaryExpression::Compile(FunctionContext& ctx, const CHIR::BinaryEx
                 case K::LE: if (type->IsSignedInteger()) a.setle(asmjit::x86::al); else a.setbe(asmjit::x86::al); break;
                 case K::GT: if (type->IsSignedInteger()) a.setg(asmjit::x86::al); else a.seta(asmjit::x86::al); break;
                 case K::GE: if (type->IsSignedInteger()) a.setge(asmjit::x86::al); else a.setae(asmjit::x86::al); break;
-                default: ctx.Fail(JitFailureKind::UnsupportedBinaryComparison); return;
+                default: JIT_FAIL("binary comparison kind is supported");
             }
             a.movzx(asmjit::x86::rax, asmjit::x86::al);
             break;
@@ -366,11 +337,9 @@ void CompileBinaryExpression::Compile(FunctionContext& ctx, const CHIR::BinaryEx
         TypeUtils::NormalizeInteger(a, asmjit::x86::rax, width, type->IsSignedInteger());
     }
     auto resultLocation = ctx.GetValueLocation(result);
-    if (!MemoryUtils::Move(ctx, *resultLocation, RegisterUtils::ToLocation(asmjit::x86::rax),
-        *result->GetType(), asmjit::x86::r11)) {
-        return;
-    }
-    if (normal && !ctx.GetFailure()) {
+    MemoryUtils::Move(ctx, *resultLocation, RegisterUtils::ToLocation(asmjit::x86::rax),
+        *result->GetType(), asmjit::x86::r11);
+    if (normal) {
         a.jmp(ctx.GetBlockLabel(normal));
     }
 }

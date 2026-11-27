@@ -22,8 +22,6 @@
 namespace Cangjie::JIT::X86_64 {
 using SymbolName = std::string_view;
 
-
-
 using BindingResult = Result<void, RuntimeError>;
 using SymbolResult = Result<void*, RuntimeError>;
 
@@ -37,7 +35,8 @@ public:
     BindingResult Initialize(const RuntimeConfig& config);
     BindingResult EnsurePackage(std::string_view package);
     SymbolResult Resolve(SymbolName name);
-#define JIT_RUNTIME_FUNCTION(name, type, symbol, required) Result<type, RuntimeError> Get##name();
+    // Every entry is bound at initialization; symbols stay valid until Close.
+#define JIT_RUNTIME_FUNCTION(name, type, symbol, required) type Get##name() const noexcept;
 #include "RuntimeFunctions.inc"
 #undef JIT_RUNTIME_FUNCTION
     // The host must first quiesce generated code and tasks. For a borrowed

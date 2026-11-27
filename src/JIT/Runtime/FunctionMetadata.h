@@ -14,8 +14,6 @@
 #include <utility>
 #include <vector>
 
-#include "../X86_64/Types.h"
-
 namespace Cangjie::JIT::X86_64 {
 // Per-function metadata: frame and safepoint roots, exception tables and
 // stack-trace strings. Serialize emits a runtime descriptor with a
@@ -35,7 +33,6 @@ public:
         std::vector<uint8_t> descriptor;
         std::array<uint8_t, 4> prefix;
     };
-    using SerializeResult = Result<EncodedMetadata, std::string>;
 
     explicit FunctionMetadata(bool stackGrowth, std::string name = {}, std::string directory = {},
         std::string filename = {})
@@ -54,7 +51,7 @@ public:
     // Addresses are final executable addresses, not their writable aliases.
     // Serialize writes the descriptor at metadataAddress and the prefix at
     // codeAddress - 4; the host keeps both allocations alive for the code lifetime.
-    SerializeResult Serialize(uintptr_t metadataAddress, uintptr_t codeAddress, uint32_t codeSize) const;
+    EncodedMetadata Serialize(uintptr_t metadataAddress, uintptr_t codeAddress, uint32_t codeSize) const;
 
 private:
     struct Safepoint {
@@ -69,8 +66,8 @@ private:
         uint32_t length;
         size_t landingPad;
     };
-    using EncodedBytes = Result<std::vector<uint8_t>, std::string>;
-    using EncodedPrefix = Result<std::array<uint8_t, 4>, std::string>;
+    using EncodedBytes = std::vector<uint8_t>;
+    using EncodedPrefix = std::array<uint8_t, 4>;
     struct RootIndices {
         uint32_t registers;
         uint32_t slots;
@@ -82,7 +79,7 @@ private:
 
     EncodedPrefix EncodePrefix(
         uintptr_t metadataAddress, uintptr_t codeAddress, uint32_t codeSize) const;
-    Result<void, std::string> ValidateMetadataInputs(const std::vector<CallSite>& sites, uint32_t codeSize) const;
+    void ValidateMetadataInputs(const std::vector<CallSite>& sites, uint32_t codeSize) const;
     EncodedBytes EncodeStackMap(std::vector<Safepoint>& points, uint32_t codeSize) const;
     EncodedBytes EncodeExceptionTable(const std::vector<CallSite>& sites) const;
     EncodedBytes EncodeDescriptor(uint32_t codeSize, const std::vector<uint8_t>& map,

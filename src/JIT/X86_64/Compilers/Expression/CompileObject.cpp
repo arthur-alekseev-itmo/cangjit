@@ -13,8 +13,10 @@
 
 #include "../Context/GlobalContext.h"
 #include "../Function/CompileFunctionStub.h"
+#include "../../JitAssert.h"
 #include "../../Utils/MemoryUtils.h"
 #include "../../Utils/RegisterUtils.h"
+#include "../../../Runtime/RuntimeError.h"
 #include "cangjie/CHIR/IR/Type/ClassDef.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
 #include "cangjie/Utils/ConstantsUtils.h"
@@ -23,17 +25,8 @@ namespace Cangjie::JIT::X86_64 {
 namespace {
 namespace x86 = asmjit::x86;
 
-void* Resolve(FunctionContext& context, SymbolResult result)
-{
-    if (!result) {
-        context.Fail(JitFailureKind::UnresolvedSymbol);
-        return nullptr;
-    }
-    return result.Value();
-}
-
 struct AllocationFunction {
-    SymbolResult address;
+    void* address;
     bool pinned;
 };
 
@@ -61,70 +54,44 @@ void CompileAllocation(FunctionContext& context, const CHIR::AllocateBase& expre
     auto type = expression.GetType();
     auto result = expression.GetResult();
     auto resultType = result ? result->GetType() : nullptr;
-    if (!type || !type->IsClass() || !resultType || !resultType->IsRef() ||
-        static_cast<const CHIR::RefType*>(resultType)->GetBaseType() != type ||
-        type->IsAutoEnvBase()) {
-        context.Fail(JitFailureKind::UnsupportedAllocation, expression.GetExprKind());
-        return;
-    }
+    // Scalar allocations go through CompileAllocate in CompileBlock.
+    JIT_ASSERT(type && type->IsClass() && resultType && resultType->IsRef() &&
+        static_cast<const CHIR::RefType*>(resultType)->GetBaseType() == type && !type->IsAutoEnvBase(),
+        "object allocation produces a class reference");
     auto def = static_cast<const CHIR::ClassType*>(type)->GetClassDef();
-    if (!def || !def->IsClass()) {
-        context.Fail(JitFailureKind::UnsupportedAllocation, expression.GetExprKind());
-        return;
-    }
-    if (!context.GetGlobalContext().GetRuntimeBindings().EnsurePackage(def->GetPackageName())) {
-        context.Fail(JitFailureKind::UnresolvedSymbol, expression.GetExprKind());
-        return;
-    }
+    JIT_ASSERT(def && def->IsClass(), "allocated class has a class definition");
+    Require(context.GetGlobalContext().GetRuntimeBindings().EnsurePackage(def->GetPackageName()));
     const bool local = type->IsLocalRegion();
 
     const bool dynamic = type->IsGenericRelated();
     auto typeInfo = dynamic ? nullptr : context.GetTypeInfoEmitter().GetConcreteTypeInfo(*type);
     auto& bindings = context.GetGlobalContext().GetRuntimeBindings();
-    auto sizeAddress = Resolve(context, bindings.GetTypeInstanceSize());
+    auto sizeAddress = bindings.GetTypeInstanceSize();
     auto allocation = SelectAllocationFunction(bindings, *def, local);
-    auto allocateAddress = Resolve(context, std::move(allocation.address));
-    if ((!dynamic && !typeInfo) || !sizeAddress || !allocateAddress) {
-        context.Fail(JitFailureKind::UnresolvedSymbol, expression.GetExprKind());
-        return;
-    }
+    auto allocateAddress = allocation.address;
+    JIT_ASSERT(dynamic || typeInfo != nullptr, "allocated class has concrete type information");
     using GetSize = uint32_t (*)(const void*);
     // Runtime expects the eight-byte header plus the payload rounded to eight bytes.
     const uint64_t payload = dynamic ? 0 : reinterpret_cast<GetSize>(sizeAddress)(typeInfo);
     const bool pinned = allocation.pinned;
     const uint64_t size = ((payload + 7) & ~uint64_t{7}) + 8;
-    if (size > std::numeric_limits<uint32_t>::max()) {
-        context.Fail(JitFailureKind::UnsupportedAllocation, expression.GetExprKind());
-        return;
-    }
+    JIT_ASSERT(size <= std::numeric_limits<uint32_t>::max(), "allocation size fits in 32 bits");
     std::vector<CodeAddress> methods;
     if (type->IsAutoEnv()) {
-        if (dynamic) {
-            context.Fail(JitFailureKind::UnsupportedAllocation, expression.GetExprKind());
-            return;
-        }
+        JIT_ASSERT(!dynamic, "generic closure environments are not allocated eagerly");
         const auto functions = def->GetMethods();
-        if (functions.size() > payload / sizeof(uint64_t) ||
-            functions.size() > (std::numeric_limits<int32_t>::max() - 8) / sizeof(uint64_t)) {
-            context.Fail(JitFailureKind::UnsupportedAllocation, expression.GetExprKind());
-            return;
-        }
+        JIT_ASSERT(functions.size() <= payload / sizeof(uint64_t) &&
+            functions.size() <= (static_cast<size_t>(std::numeric_limits<int32_t>::max()) - 8) / sizeof(uint64_t),
+            "closure environment layout has room for every captured method");
         methods.reserve(functions.size());
         for (auto method : functions) {
-            const auto address = CompileFunctionStub::Compile(context.GetGlobalContext(), method);
-            if (!address) {
-                context.Fail(JitFailureKind::UnsupportedCall, expression.GetExprKind());
-                return;
-            }
-            methods.push_back(address);
+            methods.push_back(CompileFunctionStub::Compile(context.GetGlobalContext(), method));
         }
     }
 
     auto& assembler = context.GetAssembler();
     if (dynamic) {
-        if (!context.GetTypeInfoEmitter().LoadTypeInfo(*type, x86::rax)) {
-            return;
-        }
+        context.GetTypeInfoEmitter().LoadTypeInfo(*type, x86::rax);
         assembler.sub(x86::rsp, 16);
         assembler.mov(x86::qword_ptr(x86::rsp), x86::rax);
         assembler.mov(x86::rdi, x86::rax);
@@ -146,45 +113,34 @@ void CompileAllocation(FunctionContext& context, const CHIR::AllocateBase& expre
     const auto callStart = assembler.offset();
     assembler.call(x86::r11);
     const auto callEnd = assembler.offset();
-    if (!context.GetSafepointRecorder().Record(expression)) {
-        return;
-    }
+    context.GetSafepointRecorder().Record(expression);
     if (dynamic) {
         assembler.add(x86::rsp, 16);
     }
     auto resultLocation = context.GetValueLocation(result);
-    if (!MemoryUtils::Move(context, *resultLocation, RegisterUtils::ToLocation(x86::rax),
-        *result->GetType(), x86::r11)) {
-        return;
-    }
+    MemoryUtils::Move(context, *resultLocation, RegisterUtils::ToLocation(x86::rax),
+        *result->GetType(), x86::r11);
     for (size_t i = 0; i < methods.size(); ++i) {
         assembler.long_().mov(x86::r11, asmjit::imm(methods[i]));
         assembler.mov(x86::qword_ptr(x86::rax, static_cast<int32_t>(8 + i * sizeof(uint64_t))), x86::r11);
     }
     if (local && def->GetFinalizer()) {
-        auto addFinalizer = Resolve(context, bindings.GetAddLocalFinalizer());
-        if (!addFinalizer ||
-            !MemoryUtils::Move(context, RegisterUtils::ToLocation(x86::rdi), *resultLocation,
-                *result->GetType(), x86::r11)) {
-            return;
-        }
+        auto addFinalizer = bindings.GetAddLocalFinalizer();
+        MemoryUtils::Move(context, RegisterUtils::ToLocation(x86::rdi), *resultLocation,
+            *result->GetType(), x86::r11);
         assembler.long_().mov(x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(addFinalizer)));
         assembler.call(x86::r11);
     }
-    if (normal && unwind && !context.GetFailure()) {
+    if (normal && unwind) {
         assembler.jmp(context.GetBlockLabel(normal));
         context.GetExceptionLandingEmitter().Emit(*unwind, callStart, callEnd);
     }
 }
 
-void CompileRegion(FunctionContext& context, const CHIR::Expression& expression, SymbolResult symbol)
+void CompileRegion(FunctionContext& context, const CHIR::Expression& expression, void* symbol)
 {
-    auto address = Resolve(context, std::move(symbol));
-    if (!address) {
-        return;
-    }
     auto& assembler = context.GetAssembler();
-    assembler.long_().mov(x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(address)));
+    assembler.long_().mov(x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(symbol)));
     assembler.call(x86::r11);
     context.GetSafepointRecorder().Record(expression);
 }
@@ -197,10 +153,8 @@ void CompileObjectAllocate(FunctionContext& context, const CHIR::Allocate& expre
 
 void CompileObjectAllocate(FunctionContext& context, const CHIR::TryAllocate& expression)
 {
-    if (!expression.GetSuccessBlock() || !expression.GetErrorBlock()) {
-        context.Fail(JitFailureKind::MissingBranchDestination);
-        return;
-    }
+    JIT_ASSERT(expression.GetSuccessBlock() && expression.GetErrorBlock(),
+        "try allocate has success and error destinations");
     CompileAllocation(context, expression, expression.GetSuccessBlock(), expression.GetErrorBlock());
 }
 

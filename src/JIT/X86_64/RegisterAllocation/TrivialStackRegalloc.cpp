@@ -6,10 +6,10 @@
 
 #include "TrivialStackRegalloc.h"
 
-#include <cassert>
 #include <utility>
 #include <vector>
 
+#include "../JitAssert.h"
 #include "InterferenceGraph.h"
 #include "ValueNumeration.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
@@ -21,7 +21,8 @@ RegisterAllocation TrivialStackRegalloc::Allocate(
     const ValueNumeration& numeration, const InterferenceGraph& interferenceGraph) const
 {
     const auto valueCount = numeration.GetValueCount();
-    assert(interferenceGraph.GetNodeCount() == valueCount);
+    JIT_ASSERT(interferenceGraph.GetNodeCount() == valueCount,
+        "interference graph covers every numbered value");
     (void)interferenceGraph;
 
     std::vector<Location> locations;

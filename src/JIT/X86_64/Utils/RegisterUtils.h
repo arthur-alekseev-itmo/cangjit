@@ -8,7 +8,6 @@
 #define CANGJIE_JIT_X86_64_UTILS_REGISTER_UTILS_H
 
 #include <asmjit/x86.h>
-#include <optional>
 
 #include "../Location.h"
 
@@ -16,8 +15,10 @@
 namespace Cangjie::JIT::X86_64 {
 class RegisterUtils final {
 public:
-    static std::optional<asmjit::x86::Gpq> Get64BitRegister(GPRegisterType type) noexcept;
-    static std::optional<asmjit::x86::Xmm> GetArgumentSimdRegister(size_t index) noexcept;
+    // ABI placement and moves only hand out data registers; RBP/RSP and
+    // out-of-range indices are JIT bugs.
+    static asmjit::x86::Gpq Get64BitRegister(GPRegisterType type) noexcept;
+    static asmjit::x86::Xmm GetArgumentSimdRegister(size_t index) noexcept;
     static Location ToLocation(const asmjit::x86::Gp& reg) noexcept;
     static Location ToLocation(const asmjit::x86::Xmm& reg) noexcept;
     static bool IsDataRegister(const asmjit::x86::Gp& reg) noexcept;

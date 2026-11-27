@@ -1,4 +1,4 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 //
@@ -59,11 +59,11 @@ void X86_64Compiler::Run(const CHIR::Package& package, std::ostream& output) con
         ReportError(output, "JIT: entrypoint main is not found or is incorrect");
         return;
     }
-    const auto address = CompileUserMain(*function, output);
-    if (!address) {
-        return;
+    try {
+        RunUserMain(CompileUserMain(*function), output);
+    } catch (const RuntimeError& error) {
+        ReportError(output, "JIT compilation failed: " + FormatRuntimeError(error));
     }
-    RunUserMain(*address, output);
 }
 
 const CHIR::Function* X86_64Compiler::FindUserMain(const CHIR::Package& package)
@@ -125,7 +125,6 @@ bool X86_64Compiler::ConfigureStackGrowth(bool& enabled, std::ostream& output)
     return true;
 }
 
-// FIX: Maybe im wrong, but doesn't it belong to some runtime class? Or better yet runtime loader
 bool X86_64Compiler::ConfigureRuntime(std::ostream& output) const
 {
     if (globalContext) {
@@ -154,37 +153,24 @@ bool X86_64Compiler::ConfigureRuntime(std::ostream& output) const
     return true;
 }
 
-std::optional<std::uintptr_t> X86_64Compiler::CompileUserMain(const CHIR::Function& function, std::ostream& output) const
+std::uintptr_t X86_64Compiler::CompileUserMain(const CHIR::Function& function) const
 {
-    const auto result = CompileFunction(*globalContext, function).CompileToAddress();
-    if (!result) {
-        ReportError(output, "JIT compilation failed: " + result.Error().message);
-        return std::nullopt;
-    }
-    return result.Value();
+    return CompileFunction(*globalContext, function).CompileToAddress();
 }
 
 
 void X86_64Compiler::RunUserMain(std::uintptr_t address, std::ostream& output) const
 {
     auto& bindings = globalContext->GetRuntimeBindings();
-    const auto run = bindings.GetRunTask();
-    const auto get = bindings.GetTaskReturn();
-    const auto release = bindings.GetReleaseTask();
-    if (!run || !get || !release) {
-        const auto& error = !run ? run.Error() : !get ? get.Error() : release.Error();
-        ReportError(output, "JIT runtime symbol resolution failed: " + FormatRuntimeError(error));
-        return;
-    }
     const auto entry = reinterpret_cast<CJTaskFunc>(address);
-    const auto handle = run.Value()(entry, nullptr);
+    const auto handle = bindings.GetRunTask()(entry, nullptr);
     if (!handle) {
         ReportError(output, "JIT: RunCJTask failed");
         return;
     }
     void* value = nullptr;
-    const int status = get.Value()(handle, &value);
-    release.Value()(handle);
+    const int status = bindings.GetTaskReturn()(handle, &value);
+    bindings.GetReleaseTask()(handle);
     if (status != E_OK) {
         ReportError(output, "JIT: GetTaskRet failed with error " + std::to_string(status));
         return;

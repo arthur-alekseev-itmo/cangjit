@@ -4,15 +4,17 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#ifndef CANGJIE_JIT_X86_64_TYPE_INFO_EMITTER_H
-#define CANGJIE_JIT_X86_64_TYPE_INFO_EMITTER_H
+#ifndef CANGJIE_JIT_X86_64_COMPILERS_CONTEXT_TYPE_INFO_EMITTER_H
+#define CANGJIE_JIT_X86_64_COMPILERS_CONTEXT_TYPE_INFO_EMITTER_H
 
 #include <asmjit/x86.h>
 
 #include <cstdint>
 #include <vector>
 
-namespace Cangjie::CHIR { class Type; }
+namespace Cangjie::CHIR {
+class Type;
+}
 
 namespace Cangjie::JIT::X86_64 {
 class FunctionContext;
@@ -21,12 +23,12 @@ class TypeInfoEmitter final {
 public:
     explicit TypeInfoEmitter(FunctionContext& context) noexcept : context(context) {}
     void* GetConcreteTypeInfo(const CHIR::Type& type);
-    bool LoadTypeInfo(const CHIR::Type& type, const asmjit::x86::Gp& target);
-    bool StoreTypeInfos(const std::vector<const CHIR::Type*>& types, int32_t rspOffset);
+    void LoadTypeInfo(const CHIR::Type& type, const asmjit::x86::Gp& target);
+    void StoreTypeInfos(const std::vector<const CHIR::Type*>& types, int32_t rspOffset);
 
 private:
     FunctionContext& context;
 };
 } // namespace Cangjie::JIT::X86_64
 
-#endif // CANGJIE_JIT_X86_64_TYPE_INFO_EMITTER_H
+#endif // CANGJIE_JIT_X86_64_COMPILERS_CONTEXT_TYPE_INFO_EMITTER_H

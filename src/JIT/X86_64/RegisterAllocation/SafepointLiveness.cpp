@@ -15,10 +15,10 @@
 #include <vector>
 
 #include "Liveness.h"
+#include "../JitAssert.h"
 #include "../Utils/StackFrameUtils.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
-#include "cangjie/Utils/CheckUtils.h"
 
 namespace Cangjie::JIT::X86_64 {
 namespace {
@@ -99,51 +99,43 @@ Bits ComputeInitializedAtBlock(const std::vector<CHIR::Block*>& blocks,
 }
 } // namespace
 
-SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
+SafepointRoots ComputeSafepointLiveness(const CHIR::Function& function,
     const ValueNumeration& numbers, const RegisterAllocation& allocation, const Liveness& liveness,
     const CHIR::Expression& target)
 {
     auto body = function.GetBody();
     const size_t count = numbers.GetValueCount();
-    if (!body || allocation.GetLocationCount() != count) {
-        return SafepointLivenessResult::Failure("invalid function or allocation for safepoint liveness");
-    }
+    JIT_ASSERT(body != nullptr && allocation.GetLocationCount() == count,
+        "safepoint liveness runs on a complete allocation");
     // The analysis relies on a value's slot retaining its value after its last
     // ordinary use, e.g. when it is the base of a live derived pointer.
     std::unordered_set<size_t> slots;
     for (Id id = 0; id < count; ++id) {
         auto slot = allocation.GetLocation(id).AsStack();
-        if (!slot || !slots.insert(slot->index).second ||
-            !StackFrameUtils::GetSlotOffset(slot->index, allocation.GetStackSlotCount())) {
-            return SafepointLivenessResult::Failure("safepoint liveness requires distinct valid stack locations");
-        }
+        JIT_ASSERT(slot != nullptr && slots.insert(slot->index).second,
+            "safepoint liveness requires distinct stack locations");
+        StackFrameUtils::GetSlotOffset(slot->index, allocation.GetStackSlotCount());
     }
     for (Id id = 0; id < count; ++id) {
         if (auto slot = allocation.GetAllocationSlot(id)) {
-            if (!slots.insert(*slot).second || !StackFrameUtils::GetSlotOffset(*slot, allocation.GetStackSlotCount())) {
-                return SafepointLivenessResult::Failure("invalid or overlapping stack allocation slot");
-            }
+            JIT_ASSERT(slots.insert(*slot).second, "stack allocation slot is disjoint from value slots");
+            StackFrameUtils::GetSlotOffset(*slot, allocation.GetStackSlotCount());
         }
     }
     const auto& blocks = liveness.GetBlocks();
+    // GetBlockIndex asserts that the block belongs to the analyzed function.
     const auto entry = liveness.GetBlockIndex(body->GetEntryBlock());
-    if (!entry) {
-        return SafepointLivenessResult::Failure("function has no entry block");
-    }
     std::vector<std::vector<size_t>> successors(blocks.size()), predecessors(blocks.size());
     for (size_t i = 0; i < blocks.size(); ++i) {
         for (auto successor : blocks[i]->GetSuccessors()) {
             const auto found = liveness.GetBlockIndex(successor);
-            if (!found) {
-                return SafepointLivenessResult::Failure("CFG successor outside function");
-            }
-            successors[i].push_back(*found);
-            predecessors[*found].push_back(i);
+            successors[i].push_back(found);
+            predecessors[found].push_back(i);
         }
     }
     std::vector<unsigned char> reachable(blocks.size());
-    std::vector<size_t> work{*entry};
-    reachable[*entry] = 1;
+    std::vector<size_t> work{entry};
+    reachable[entry] = 1;
     for (size_t n = 0; n < work.size(); ++n) {
         for (auto next : successors[work[n]]) {
             if (!reachable[next]) {
@@ -153,35 +145,27 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
         }
     }
     const auto targetBlock = liveness.GetBlockIndex(target.GetParentBlock());
-    if (!targetBlock || !reachable[*targetBlock]) {
-        return SafepointLivenessResult::Failure("safepoint is not in a reachable block");
-    }
+    JIT_ASSERT(reachable[targetBlock], "safepoint is in a reachable block");
     for (auto b : work) {
         for (auto expr : blocks[b]->GetExpressions()) {
             auto result = expr->GetResult();
-            if (result && !numbers.GetId(result)) {
-                return SafepointLivenessResult::Failure("expression result is missing from value numeration");
-            }
+            JIT_ASSERT(!result || numbers.GetId(result),
+                "expression result is missing from value numeration");
             for (size_t operand = 0; operand < expr->GetNumOfNonSuccessorOperands(); ++operand) {
                 auto value = expr->GetOperand(operand);
-                if (value && (value->IsLocalVar() || value->IsParameter()) && !numbers.GetId(value)) {
-                    return SafepointLivenessResult::Failure("expression operand is missing from value numeration");
-                }
+                JIT_ASSERT(!(value && (value->IsLocalVar() || value->IsParameter()) && !numbers.GetId(value)),
+                    "expression operand is missing from value numeration");
             }
         }
     }
 
-    const size_t b = *targetBlock;
-    Bits initialized = ComputeInitializedAtBlock(blocks, predecessors, reachable, work, *entry, b, numbers);
-    if (!liveness.ContainsExpression(target)) {
-        return SafepointLivenessResult::Failure("safepoint expression is absent from its block");
-    }
+    const size_t b = targetBlock;
+    Bits initialized = ComputeInitializedAtBlock(blocks, predecessors, reachable, work, entry, b, numbers);
+    JIT_ASSERT(liveness.ContainsExpression(target), "safepoint expression belongs to its block");
     auto live = liveness.GetLiveBefore(target);
-    bool found = false;
     const auto expressions = blocks[b]->GetExpressions();
     for (auto expr : expressions) {
         if (expr == &target) {
-            found = true;
             break;
         }
         if (auto result = expr->GetResult()) {
@@ -190,40 +174,31 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
             }
         }
     }
-    CJC_ASSERT(found);
-    if (!found) {
-        return SafepointLivenessResult::Failure("safepoint expression is absent from its block");
-    }
     // Ensure a try-result is not used on the exception edge. Such a value is
     // uninitialized even though the ordinary transfer kills the definition.
     const auto branches = target.GetSuccessAndErrorBlocks();
     if (branches.second && target.GetResult()) {
         const auto e = liveness.GetBlockIndex(branches.second);
         const auto id = numbers.GetId(target.GetResult());
-        if (e && id && Liveness::Contains(liveness.GetLiveIn(branches.second), *id)) {
-            return SafepointLivenessResult::Failure("try result is live on its exception edge");
-        }
+        JIT_ASSERT(!(e && id && Liveness::Contains(liveness.GetLiveIn(branches.second), *id)),
+            "try result is not live on its exception edge");
     }
 
     FunctionMetadata::Roots gc{0, {}}, stack{0, {}};
     std::unordered_map<Id, std::vector<int32_t>> derived;
     std::unordered_set<Id> roots;
-    std::string error;
-    auto offset = [&](Id id) { return *StackFrameUtils::GetSlotOffset(
+    auto offset = [&](Id id) { return StackFrameUtils::GetSlotOffset(
         allocation.GetLocation(id).AsStack()->index, allocation.GetStackSlotCount()); };
     // Resolve interior references to either a stack allocation or a managed
     // object base. The base may be dead in CHIR but must still be initialized.
     std::function<int(Id, std::unordered_set<Id>&)> classify = [&](Id id, std::unordered_set<Id>& seen) -> int {
-        if (!initialized[id] || !seen.insert(id).second) {
-            error = "uninitialized or cyclic reference provenance at safepoint";
-            return -1;
-        }
+        // A live value is initialized here unless the CHIR graph violates its
+        // own data flow; reference provenance must terminate.
+        JIT_ASSERT(initialized[id] && seen.insert(id).second,
+            "uninitialized or cyclic reference provenance at safepoint");
         auto value = numbers.GetValue(id);
         auto type = value ? value->GetType() : nullptr;
-        if (!type) {
-            error = "live value has no CHIR type";
-            return -1;
-        }
+        JIT_ASSERT(type != nullptr, "live value has a CHIR type");
         auto expr = value->IsLocalVar() ? static_cast<const CHIR::LocalVar*>(value)->GetExpr() : nullptr;
         auto referenceBase = type->IsRef() ? static_cast<const CHIR::RefType*>(type)->GetBaseType() : nullptr;
         if (expr && expr->GetExprKind() == CHIR::ExprKind::ALLOCATE && referenceBase && referenceBase->IsRef()) {
@@ -241,12 +216,10 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
             const bool allocatedHere = expr &&
                 (expr->GetExprKind() == CHIR::ExprKind::ALLOCATE ||
                     expr->GetExprKind() == CHIR::ExprKind::TRY_ALLOCATE);
-            if (referenceBase && referenceBase->IsClass() &&
-                (referenceBase->IsMustLocalRegion() || allocatedHere)) {
-                return 0;
-            }
-            error = "live maybe-local reference cannot be represented as a GC root";
-            return -1;
+            JIT_ASSERT(referenceBase && referenceBase->IsClass() &&
+                (referenceBase->IsMustLocalRegion() || allocatedHere),
+                "live maybe-local reference cannot be represented as a GC root");
+            return 0;
         }
         // Landing-pad GetException denotes the runtime's unmanaged
         // ExceptionWrapper, not the managed exception returned by begin-catch.
@@ -260,25 +233,17 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
                 roots.insert(id);
                 return 2;
             }
-            if (expr->GetExprKind() != CHIR::ExprKind::ALLOCATE ||
-                !base || !base->IsPrimitive() || !allocation.GetAllocationSlot(id)) {
-                error = "stack allocation has unsupported or potentially managed contents";
-                return -1;
-            }
+            JIT_ASSERT(expr->GetExprKind() == CHIR::ExprKind::ALLOCATE && base && base->IsPrimitive() &&
+                allocation.GetAllocationSlot(id),
+                "stack allocation has unsupported or potentially managed contents");
             return 1;
         }
         if (expr && (expr->GetExprKind() == CHIR::ExprKind::GET_ELEMENT_REF ||
                      expr->GetExprKind() == CHIR::ExprKind::GET_ELEMENT_BY_NAME)) {
             const auto base = numbers.GetId(expr->GetOperand(0));
-            if (!base) {
-                error = "interior reference base has no allocated location";
-                return -1;
-            }
+            JIT_ASSERT(base, "interior reference base has an allocated location");
             int kind = classify(*base, seen);
-            if (kind == 0) {
-                error = "interior reference has an unmanaged base";
-                return -1;
-            }
+            JIT_ASSERT(kind != 0, "interior reference has a managed base");
             if (kind == 2) {
                 // classify() records a managed base, or a derived base. Find
                 // its ultimate root, and associate this location with it.
@@ -300,14 +265,10 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
             roots.insert(id);
             return 2;
         }
-        if (type->IsRef() || type->IsCPointer() || type->IsCString()) {
-            error = "reference origin cannot be represented exactly";
-            return -1;
-        }
-        if (!type->IsPrimitive() && !type->IsVoid() && !type->IsNothing()) {
-            error = "live aggregate or unknown CHIR type requires a GC layout";
-            return -1;
-        }
+        JIT_ASSERT(!(type->IsRef() || type->IsCPointer() || type->IsCString()),
+            "reference origin cannot be represented exactly");
+        JIT_ASSERT(type->IsPrimitive() || type->IsVoid() || type->IsNothing(),
+            "live aggregate or unknown CHIR type requires a GC layout");
         return 0;
     };
     for (Id id = 0; id < count; ++id) {
@@ -315,11 +276,7 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
             continue;
         }
         std::unordered_set<Id> seen;
-        int kind = classify(id, seen);
-        if (kind < 0) {
-            return SafepointLivenessResult::Failure(std::move(error));
-        }
-        if (kind == 1) {
+        if (classify(id, seen) == 1) {
             stack.slots.push_back(offset(id));
         }
     }
@@ -335,15 +292,12 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
     FunctionMetadata::DerivedRoots perRoot;
     perRoot.reserve(gc.slots.size());
     for (auto slot : gc.slots) {
-        auto it = std::find_if(roots.begin(), roots.end(), [&](Id id) { return offset(id) == slot; });
-        CJC_ASSERT(it != roots.end());
-        if (it == roots.end()) {
-            return SafepointLivenessResult::Failure("safepoint root has no corresponding value");
-        }
+        const auto it = std::find_if(roots.begin(), roots.end(), [&](Id id) { return offset(id) == slot; });
+        JIT_ASSERT(it != roots.end(), "safepoint root has a corresponding value");
         auto values = derived[*it];
         sortUnique(values);
         perRoot.push_back({0, std::move(values)});
     }
-    return SafepointLivenessResult::Success({std::move(gc), std::move(stack), std::move(perRoot)});
+    return {std::move(gc), std::move(stack), std::move(perRoot)};
 }
 } // namespace Cangjie::JIT::X86_64

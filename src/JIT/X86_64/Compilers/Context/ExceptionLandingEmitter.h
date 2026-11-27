@@ -9,7 +9,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <vector>
 
 namespace Cangjie::CHIR { class Block; }
@@ -20,10 +19,10 @@ class FunctionContext;
 class ExceptionLandingEmitter final {
 public:
     explicit ExceptionLandingEmitter(FunctionContext& context) noexcept : context(context) {}
-    bool Emit(const CHIR::Block& block, size_t callStart, size_t callEnd);
+    void Emit(const CHIR::Block& block, size_t callStart, size_t callEnd);
 
 private:
-    std::optional<std::vector<uintptr_t>> GetExceptionTypes(const CHIR::Block& block);
+    std::vector<uintptr_t> GetExceptionTypes(const CHIR::Block& block);
     FunctionContext& context;
 };
 } // namespace Cangjie::JIT::X86_64

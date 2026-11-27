@@ -6,6 +6,7 @@
 
 #include "CompileGoTo.h"
 
+#include "../../JitAssert.h"
 #include "../Context/FunctionContext.h"
 #include "cangjie/CHIR/IR/Expression/Terminator.h"
 
@@ -13,10 +14,7 @@ namespace Cangjie::JIT::X86_64 {
 void CompileGoTo::Compile(FunctionContext& ctx, const CHIR::GoTo& expr)
 {
     auto destination = expr.GetDestination();
-    if (!destination) {
-        ctx.Fail(JitFailureKind::MissingGoToDestination);
-        return;
-    }
+    JIT_ASSERT(destination != nullptr, "GoTo has a destination");
     ctx.GetAssembler().jmp(ctx.GetBlockLabel(destination));
 }
 } // namespace Cangjie::JIT::X86_64

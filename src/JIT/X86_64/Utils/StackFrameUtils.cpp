@@ -8,35 +8,33 @@
 
 #include <limits>
 
+#include "../JitAssert.h"
+
 namespace Cangjie::JIT::X86_64 {
 namespace {
 constexpr size_t SLOT_SIZE = sizeof(uint64_t);
 constexpr size_t STACK_ALIGNMENT = 16;
+constexpr size_t INT32_MAX_SLOTS = (static_cast<size_t>(std::numeric_limits<int32_t>::max()) + 1) / SLOT_SIZE;
 }
 
-std::optional<uint32_t> StackFrameUtils::GetFrameSize(size_t slotCount) noexcept
+uint32_t StackFrameUtils::GetFrameSize(size_t slotCount) noexcept
 {
-    if (slotCount > (static_cast<size_t>(std::numeric_limits<int32_t>::max()) - (STACK_ALIGNMENT - 1)) / SLOT_SIZE) {
-        return std::nullopt;
-    }
+    JIT_ASSERT(slotCount < INT32_MAX_SLOTS, "stack frame is too large");
     return static_cast<uint32_t>((slotCount * SLOT_SIZE + STACK_ALIGNMENT - 1) & ~(STACK_ALIGNMENT - 1));
 }
 
-std::optional<int32_t> StackFrameUtils::GetSlotOffset(size_t slot, size_t slotCount) noexcept
+int32_t StackFrameUtils::GetSlotOffset(size_t slot, size_t slotCount) noexcept
 {
     // The runtime uses the first slot below RBP to recover the function entry.
-    if (slot >= slotCount || slot > static_cast<size_t>(std::numeric_limits<int32_t>::max()) / SLOT_SIZE - 2) {
-        return std::nullopt;
-    }
+    JIT_ASSERT(slot < slotCount && slot + 2 < INT32_MAX_SLOTS, "stack slot is out of range");
     return -static_cast<int32_t>((slot + 2) * SLOT_SIZE);
 }
 
-std::optional<int32_t> StackFrameUtils::GetIncomingArgumentOffset(size_t index) noexcept
+int32_t StackFrameUtils::GetIncomingArgumentOffset(size_t index) noexcept
 {
     constexpr size_t BASE_OFFSET = 2 * SLOT_SIZE;
-    if (index > (static_cast<size_t>(std::numeric_limits<int32_t>::max()) - BASE_OFFSET) / SLOT_SIZE) {
-        return std::nullopt;
-    }
+    JIT_ASSERT(BASE_OFFSET + index * SLOT_SIZE < static_cast<size_t>(std::numeric_limits<int32_t>::max()),
+        "incoming argument offset is out of range");
     return static_cast<int32_t>(BASE_OFFSET + index * SLOT_SIZE);
 }
 } // namespace Cangjie::JIT::X86_64

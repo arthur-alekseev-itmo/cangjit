@@ -12,9 +12,11 @@
 namespace Cangjie::JIT::X86_64 {
 class FunctionResolver final {
 public:
-    using Materialize = CompilationResult (*)(const CHIR::Function& function, void* context);
+    // Materializes a function; a RuntimeError propagates to the resolver stub,
+    // which reports it and terminates.
+    using Materialize = CodeAddress (*)(const CHIR::Function& function, void* context);
 
-    CompilationResult Resolve(FunctionRecord& record, Materialize materialize, void* context) const;
+    CodeAddress Resolve(FunctionRecord& record, Materialize materialize, void* context) const;
 };
 } // namespace Cangjie::JIT::X86_64
 

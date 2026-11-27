@@ -9,14 +9,13 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 
 namespace Cangjie::JIT::X86_64 {
 class StackFrameUtils final {
 public:
-    static std::optional<uint32_t> GetFrameSize(size_t slotCount) noexcept;
-    static std::optional<int32_t> GetSlotOffset(size_t slot, size_t slotCount) noexcept;
-    static std::optional<int32_t> GetIncomingArgumentOffset(size_t index) noexcept;
+    static uint32_t GetFrameSize(size_t slotCount) noexcept;
+    static int32_t GetSlotOffset(size_t slot, size_t slotCount) noexcept;
+    static int32_t GetIncomingArgumentOffset(size_t index) noexcept;
 };
 } // namespace Cangjie::JIT::X86_64
 

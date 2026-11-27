@@ -12,7 +12,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include "JitFailure.h"
 #include "ExceptionLandingEmitter.h"
 #include "SafepointRecorder.h"
 #include "TypeInfoEmitter.h"
@@ -35,26 +34,26 @@ class GlobalContext;
 
 // Per-function JIT state: emitted code, allocation, metadata, and diagnostics.
 // Also tracks labels and pending work while the function is compiled.
+// AsmJit errors are recorded by the error handler and checked once after
+// emission; a JIT bug or unsupported construct aborts through JIT_ASSERT.
 class FunctionContext final {
 public:
     FunctionContext(GlobalContext& globalContext, const CHIR::Function* function, ValueNumeration valueNumeration,
         Liveness liveness, RegisterAllocation registerAllocation) noexcept;
-    bool Prepare();
+    void Prepare();
 
     GlobalContext& GetGlobalContext() const noexcept;
     asmjit::CodeHolder& GetCode() noexcept;
     asmjit::x86::Assembler& GetAssembler() noexcept;
     FunctionMetadata& GetMetadata() noexcept;
 
-    std::optional<int32_t> GetHiddenTypeInfoOffset(size_t index) const noexcept;
+    int32_t GetHiddenTypeInfoOffset(size_t index) const noexcept;
     TypeInfoEmitter& GetTypeInfoEmitter() noexcept { return typeInfoEmitter; }
     SafepointRecorder& GetSafepointRecorder() noexcept { return safepointRecorder; }
     ExceptionLandingEmitter& GetExceptionLandingEmitter() noexcept { return exceptionLandingEmitter; }
     asmjit::Error GetError() const noexcept;
     asmjit::Label GetBlockLabel(const CHIR::Block* block);
     asmjit::Label GetEpilogueLabel() const noexcept;
-    void Fail(JitFailureKind kind, std::optional<CHIR::ExprKind> expressionKind = std::nullopt) noexcept;
-    const std::optional<JitFailure>& GetFailure() const noexcept;
     const CHIR::Function* GetFunction() const noexcept;
     std::vector<PendingLazyCallSite>& GetLazyCallSites() noexcept;
     const ValueNumeration& GetValueNumeration() const noexcept;
@@ -75,7 +74,7 @@ private:
         asmjit::Error firstError = asmjit::kErrorOk;
     };
     void ReserveHiddenTypeInfoSlots() noexcept;
-    bool InitializeAssembler();
+    void InitializeAssembler();
 
 
     GlobalContext& globalContext;
@@ -84,7 +83,6 @@ private:
     asmjit::x86::Assembler assembler;
     asmjit::Error error;
     FunctionMetadata metadata;
-    std::optional<JitFailure> failure;
     SafepointRecorder safepointRecorder{*this};
     ExceptionLandingEmitter exceptionLandingEmitter{*this};
     TypeInfoEmitter typeInfoEmitter{*this};

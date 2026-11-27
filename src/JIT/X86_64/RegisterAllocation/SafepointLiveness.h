@@ -7,10 +7,7 @@
 #ifndef CANGJIE_JIT_X86_64_REGISTER_ALLOCATION_SAFEPOINT_LIVENESS_H
 #define CANGJIE_JIT_X86_64_REGISTER_ALLOCATION_SAFEPOINT_LIVENESS_H
 
-#include <string>
-
 #include "../../Runtime/FunctionMetadata.h"
-#include "../Types.h"
 #include "RegisterAllocation.h"
 
 namespace Cangjie::CHIR {
@@ -27,11 +24,10 @@ struct SafepointRoots {
     FunctionMetadata::Roots stackRoots;
     FunctionMetadata::DerivedRoots derivedRoots;
 };
-using SafepointLivenessResult = Result<SafepointRoots, std::string>;
 
 // Analyze immediately before expression: arguments are live; its result is not
-// yet initialized. A string means no exact, safe stack map can be emitted.
-SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
+// yet initialized.
+SafepointRoots ComputeSafepointLiveness(const CHIR::Function& function,
     const ValueNumeration& numeration, const RegisterAllocation& allocation, const Liveness& liveness,
     const CHIR::Expression& expression);
 } // namespace Cangjie::JIT::X86_64

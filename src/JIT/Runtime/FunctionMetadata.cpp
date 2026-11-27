@@ -7,6 +7,8 @@
 #include "FunctionMetadata.h"
 #include "BinaryUtils.h"
 
+#include "../X86_64/JitAssert.h"
+
 #include <algorithm>
 #include <functional>
 
@@ -49,11 +51,10 @@ void FunctionMetadata::RecordCallSite(uint32_t start, uint32_t length, size_t la
     callSites.push_back({start, length, landingPad});
 }
 
-FunctionMetadata::SerializeResult FunctionMetadata::Serialize(uintptr_t metadataAddress,
+FunctionMetadata::EncodedMetadata FunctionMetadata::Serialize(uintptr_t metadataAddress,
     uintptr_t codeAddress, uint32_t codeSize) const
 {
     auto prefix = EncodePrefix(metadataAddress, codeAddress, codeSize);
-    if (!prefix) return SerializeResult::Failure(std::move(prefix).Error());
 
     auto points = safepoints;
     std::sort(points.begin(), points.end(), [](const auto& a, const auto& b) { return a.pc < b.pc; });
@@ -63,60 +64,50 @@ FunctionMetadata::SerializeResult FunctionMetadata::Serialize(uintptr_t metadata
         if (a.length != b.length) return a.length < b.length;
         return a.landingPad < b.landingPad;
     });
-    auto error = ValidateMetadataInputs(sites, codeSize);
-    if (!error) return SerializeResult::Failure(std::move(error).Error());
+    ValidateMetadataInputs(sites, codeSize);
 
     auto map = EncodeStackMap(points, codeSize);
-    if (!map) return SerializeResult::Failure(std::move(map).Error());
     auto eh = EncodeExceptionTable(sites);
-    if (!eh) return SerializeResult::Failure(std::move(eh).Error());
-    auto descriptor = EncodeDescriptor(codeSize, map.Value(), eh.Value());
-    if (!descriptor) return SerializeResult::Failure(std::move(descriptor).Error());
-    return SerializeResult::Success({std::move(descriptor).Value(), prefix.Value()});
+    auto descriptor = EncodeDescriptor(codeSize, map, eh);
+    return {std::move(descriptor), prefix};
 }
 
 FunctionMetadata::EncodedPrefix FunctionMetadata::EncodePrefix(
     uintptr_t metadataAddress, uintptr_t codeAddress, uint32_t codeSize) const
 {
-    if (metadataAddress == 0 || (metadataAddress & 3) != 0 || codeAddress < 4 || codeSize == 0) {
-        return EncodedPrefix::Failure("invalid metadata or code address/size");
-    }
-    if (!hasFrame) return EncodedPrefix::Failure("frame information was not recorded");
+    JIT_ASSERT(metadataAddress != 0 && (metadataAddress & 3) == 0 && codeAddress >= 4 && codeSize != 0,
+        "invalid metadata or code address/size");
+    JIT_ASSERT(hasFrame, "frame information was not recorded");
     const uintptr_t prefix = codeAddress - 4;
     int64_t relative;
     if (metadataAddress >= prefix) {
-        if (metadataAddress - prefix > INT32_MAX) return EncodedPrefix::Failure("descriptor is out of range");
+        JIT_ASSERT(metadataAddress - prefix <= INT32_MAX, "descriptor is out of range");
         relative = static_cast<int64_t>(metadataAddress - prefix);
     } else {
-        if (prefix - metadataAddress > uint64_t{INT32_MAX} + 1) return EncodedPrefix::Failure("descriptor is out of range");
+        JIT_ASSERT(prefix - metadataAddress <= uint64_t{INT32_MAX} + 1, "descriptor is out of range");
         relative = -static_cast<int64_t>(prefix - metadataAddress);
     }
-    if (relative == 0) return EncodedPrefix::Failure("descriptor overlaps code prefix");
+    JIT_ASSERT(relative != 0, "descriptor overlaps code prefix");
     std::array<uint8_t, 4> prefixBytes{};
     for (unsigned i = 0; i < 4; ++i) prefixBytes[i] = static_cast<uint8_t>(static_cast<uint32_t>(relative) >> (8 * i));
 
-    return EncodedPrefix::Success(prefixBytes);
+    return prefixBytes;
 }
 
-Result<void, std::string> FunctionMetadata::ValidateMetadataInputs(const std::vector<CallSite>& sites,
+void FunctionMetadata::ValidateMetadataInputs(const std::vector<CallSite>& sites,
     uint32_t codeSize) const
 {
     uint64_t end = 0;
     for (const auto& site : sites) {
-        if (site.length == 0 || site.start < end || uint64_t{site.start} + site.length > codeSize ||
-            site.landingPad >= landingPads.size()) {
-            return Result<void, std::string>::Failure("invalid or overlapping call sites");
-        }
+        JIT_ASSERT(site.length != 0 && site.start >= end && uint64_t{site.start} + site.length <= codeSize &&
+            site.landingPad < landingPads.size(), "invalid or overlapping call sites");
         end = uint64_t{site.start} + site.length;
-        if (landingPads[site.landingPad].offset == 0 || landingPads[site.landingPad].offset >= codeSize) {
-            return Result<void, std::string>::Failure("invalid landing pad offset");
-        }
+        JIT_ASSERT(landingPads[site.landingPad].offset != 0 && landingPads[site.landingPad].offset < codeSize,
+            "invalid landing pad offset");
     }
     for (const auto text : {&name, &directory, &filename}) {
-        if (text->find_first_of(",\0", 0, 2) != std::string::npos) return Result<void, std::string>::Failure("invalid stack trace string");
+        JIT_ASSERT(text->find_first_of(",\0", 0, 2) == std::string::npos, "invalid stack trace string");
     }
-
-    return Result<void, std::string>::Success();
 }
 
 FunctionMetadata::EncodedBytes FunctionMetadata::EncodeStackMap(std::vector<Safepoint>& points,
@@ -139,18 +130,20 @@ FunctionMetadata::EncodedBytes FunctionMetadata::EncodeStackMap(std::vector<Safe
     uint32_t lastPc = 0;
     bool first = true;
     for (auto& point : points) {
-        if (point.pc > codeSize || (!first && point.pc == lastPc)) return EncodedBytes::Failure("invalid or duplicate safepoint PC");
+        JIT_ASSERT(point.pc <= codeSize && (first || point.pc != lastPc), "invalid or duplicate safepoint PC");
         first = false;
         lastPc = point.pc;
-        if (!stackGrowth && (point.stackRoots.registers != 0 || !point.stackRoots.slots.empty())) return EncodedBytes::Failure("stack roots require stack growth");
+        JIT_ASSERT(stackGrowth || (point.stackRoots.registers == 0 && point.stackRoots.slots.empty()),
+            "stack roots require stack growth");
         auto normalize = [](Roots& roots) {
             std::sort(roots.slots.begin(), roots.slots.end(), std::greater<int32_t>());
             return std::adjacent_find(roots.slots.begin(), roots.slots.end()) == roots.slots.end() &&
                 std::all_of(roots.slots.begin(), roots.slots.end(), [](int32_t n) { return n % 8 == 0; });
         };
-        if (!normalize(point.gcRoots) || !normalize(point.stackRoots)) return EncodedBytes::Failure("invalid root slots");
+        JIT_ASSERT(normalize(point.gcRoots) && normalize(point.stackRoots), "invalid root slots");
         size_t baseCount = static_cast<size_t>(__builtin_popcount(point.gcRoots.registers & 0xffffu)) + point.gcRoots.slots.size();
-        if (!point.derivedRoots.empty() && point.derivedRoots.size() != baseCount) return EncodedBytes::Failure("derived roots do not match bases");
+        JIT_ASSERT(point.derivedRoots.empty() || point.derivedRoots.size() == baseCount,
+            "derived roots do not match bases");
         auto gcIdx = addRoots(point.gcRoots);
         auto stackIdx = addRoots(point.stackRoots);
         lines.push_back(point.line);
@@ -158,7 +151,7 @@ FunctionMetadata::EncodedBytes FunctionMetadata::EncodeStackMap(std::vector<Safe
         if (!point.derivedRoots.empty()) {
             derivedIdx = static_cast<uint32_t>(derivatives.size() + 1);
             for (auto& d : point.derivedRoots) {
-                if (!normalize(d)) return EncodedBytes::Failure("invalid derived slots");
+                JIT_ASSERT(normalize(d), "invalid derived slots");
                 derivatives.push_back(addRoots(d));
             }
         }
@@ -247,7 +240,7 @@ FunctionMetadata::EncodedBytes FunctionMetadata::EncodeStackMap(std::vector<Safe
     // Runtime bit reads may access four bytes beyond the final field.
     map.resize(map.size() + 5, 0);
 
-    return EncodedBytes::Success(std::move(map));
+    return map;
 }
 
 FunctionMetadata::EncodedBytes FunctionMetadata::EncodeExceptionTable(const std::vector<CallSite>& sites) const
@@ -262,7 +255,8 @@ FunctionMetadata::EncodedBytes FunctionMetadata::EncodeExceptionTable(const std:
         BinaryUtils::AppendULEB128(callTable, offset);
         BinaryUtils::AppendULEB128(callTable, action);
         for (size_t i = 0; i < catches.size(); ++i) {
-            if (types.size() == 255) return EncodedBytes::Failure("too many exception types");
+            // The runtime table indexes types with one byte.
+            JIT_ASSERT(types.size() < 255, "too many exception types");
             types.push_back(catches[i]);
             actions.push_back(static_cast<uint8_t>(types.size()));
             actions.push_back(i + 1 == catches.size() ? 0 : 1);
@@ -282,7 +276,7 @@ FunctionMetadata::EncodedBytes FunctionMetadata::EncodeExceptionTable(const std:
         eh.insert(eh.end(), tail.begin(), tail.end());
     }
 
-    return EncodedBytes::Success(std::move(eh));
+    return eh;
 }
 
 FunctionMetadata::EncodedBytes FunctionMetadata::EncodeDescriptor(uint32_t codeSize,
@@ -309,31 +303,23 @@ FunctionMetadata::EncodedBytes FunctionMetadata::EncodeDescriptor(uint32_t codeS
         }
         result.push_back(0);
     }
-    if (!BinaryUtils::PatchU32LE(result, dict, count) ||
-        !BinaryUtils::PatchU32LE(result, dict + 4, static_cast<uint32_t>(result.size() - dict))) {
-        return EncodedBytes::Failure("invalid descriptor patch offset");
-    }
+    BinaryUtils::PatchU32LE(result, dict, count);
+    BinaryUtils::PatchU32LE(result, dict + 4, static_cast<uint32_t>(result.size() - dict));
     result.insert(result.end(), dictionary.begin(), dictionary.end());
     result.push_back(0);
-    if (!BinaryUtils::PatchU32LE(result, 4, codeSize) ||
-        !BinaryUtils::PatchU32LE(result, 8, offsets[0]) ||
-        !BinaryUtils::PatchU32LE(result, 12, offsets[1]) ||
-        !BinaryUtils::PatchU32LE(result, 16, offsets[2]) ||
-        !BinaryUtils::PatchU32LE(result, 20, static_cast<uint32_t>(dict))) {
-        return EncodedBytes::Failure("invalid descriptor patch offset");
-    }
-    if (result.size() > INT32_MAX) return EncodedBytes::Failure("metadata too large");
-    if (!BinaryUtils::PatchU32LE(result, 0, static_cast<uint32_t>(result.size()))) {
-        return EncodedBytes::Failure("invalid descriptor patch offset");
-    }
+    BinaryUtils::PatchU32LE(result, 4, codeSize);
+    BinaryUtils::PatchU32LE(result, 8, offsets[0]);
+    BinaryUtils::PatchU32LE(result, 12, offsets[1]);
+    BinaryUtils::PatchU32LE(result, 16, offsets[2]);
+    BinaryUtils::PatchU32LE(result, 20, static_cast<uint32_t>(dict));
+    JIT_ASSERT(result.size() <= INT32_MAX, "metadata too large");
+    BinaryUtils::PatchU32LE(result, 0, static_cast<uint32_t>(result.size()));
     result.insert(result.end(), map.begin(), map.end());
     if (!eh.empty()) {
-        if (result.size() > INT32_MAX) return EncodedBytes::Failure("metadata too large");
-        if (!BinaryUtils::PatchU32LE(result, 24, static_cast<uint32_t>(result.size() - 24))) {
-            return EncodedBytes::Failure("invalid descriptor patch offset");
-        }
+        JIT_ASSERT(result.size() <= INT32_MAX, "metadata too large");
+        BinaryUtils::PatchU32LE(result, 24, static_cast<uint32_t>(result.size() - 24));
         result.insert(result.end(), eh.begin(), eh.end());
     }
-    return EncodedBytes::Success(std::move(result));
+    return result;
 }
 } // namespace Cangjie::JIT::X86_64

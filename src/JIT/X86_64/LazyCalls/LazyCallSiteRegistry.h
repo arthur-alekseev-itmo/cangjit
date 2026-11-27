@@ -30,7 +30,8 @@ struct LazyCallSite {
 
 class LazyCallSiteRegistry final {
 public:
-    bool Register(CodeAddress caller, size_t codeSize, const std::vector<PendingLazyCallSite>& sites) noexcept;
+    // Throws RuntimeErrorKind::OutOfMemory when the map allocation fails.
+    void Register(CodeAddress caller, size_t codeSize, const std::vector<PendingLazyCallSite>& sites);
     const LazyCallSite* Find(CodeAddress returnAddress) const noexcept;
 
 private:

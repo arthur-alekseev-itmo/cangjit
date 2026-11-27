@@ -19,11 +19,13 @@ namespace Cangjie::JIT::X86_64 {
 class FunctionContext;
 class Location;
 
+// Emitting a move records AsmJit errors on the context; the sticky error is
+// checked once after the function body is emitted.
 class MemoryUtils final {
 public:
-    static bool Move(FunctionContext& context, const Location& destination, const Location& source,
+    static void Move(FunctionContext& context, const Location& destination, const Location& source,
         const CHIR::Type& type, const asmjit::x86::Gp& scratch);
-    static bool StoreConstant(FunctionContext& context, uint64_t bits, const Location& destination,
+    static void StoreConstant(FunctionContext& context, uint64_t bits, const Location& destination,
         const CHIR::Type& type, const asmjit::x86::Gp& scratch);
 };
 } // namespace Cangjie::JIT::X86_64

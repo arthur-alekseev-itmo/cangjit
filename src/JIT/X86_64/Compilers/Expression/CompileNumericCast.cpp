@@ -11,6 +11,7 @@
 #include "../../Utils/MemoryUtils.h"
 #include "../../Utils/TypeUtils.h"
 #include "../../Utils/RegisterUtils.h"
+#include "../../JitAssert.h"
 #include "../Context/FunctionContext.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Type/Type.h"
@@ -26,10 +27,7 @@ void CompileNumericCast::Compile(FunctionContext& context, const CHIR::NumericCa
     auto result = expression.GetResult();
     auto sourceType = source ? source->GetType() : nullptr;
     auto targetType = result ? result->GetType() : nullptr;
-    if (!sourceType || !targetType) {
-        context.Fail(JitFailureKind::UnsupportedNumericCast);
-        return;
-    }
+    JIT_ASSERT(sourceType && targetType, "numeric cast has source and result types");
     const auto sourceKind = sourceType->GetTypeKind();
     const auto targetKind = targetType->GetTypeKind();
     const bool sourceFloat = TypeUtils::IsFloating(*sourceType);
@@ -41,25 +39,18 @@ void CompileNumericCast::Compile(FunctionContext& context, const CHIR::NumericCa
     }
     const auto sourceWidth = TypeUtils::IntegerWidth(*sourceType);
     const auto targetWidth = TypeUtils::IntegerWidth(*targetType);
-    if (!sourceWidth || !targetWidth) {
-        context.Fail(JitFailureKind::UnsupportedNumericCast);
-        return;
-    }
+    JIT_ASSERT(sourceWidth && targetWidth, "numeric cast converts between integer types");
     const bool sourceSigned = sourceType->IsSignedInteger();
     const bool targetSigned = targetType->IsSignedInteger();
     const bool alwaysFits = sourceSigned == targetSigned ? targetWidth >= sourceWidth :
         !sourceSigned && targetSigned && targetWidth > sourceWidth;
     const auto overflow = expression.GetOverflowStrategy();
-    if (overflow != OverflowStrategy::NA && overflow != OverflowStrategy::WRAPPING &&
-        overflow != OverflowStrategy::SATURATING && overflow != OverflowStrategy::THROWING) {
-        context.Fail(JitFailureKind::UnsupportedNumericCastOverflow);
-        return;
-    }
+    JIT_ASSERT(overflow == OverflowStrategy::NA || overflow == OverflowStrategy::WRAPPING ||
+        overflow == OverflowStrategy::SATURATING || overflow == OverflowStrategy::THROWING,
+        "numeric cast overflow strategy is supported");
     auto sourceLocation = context.GetValueLocation(source);
-    if (!MemoryUtils::Move(context, RegisterUtils::ToLocation(asmjit::x86::rax),
-        *sourceLocation, *sourceType, asmjit::x86::r11)) {
-        return;
-    }
+    MemoryUtils::Move(context, RegisterUtils::ToLocation(asmjit::x86::rax),
+        *sourceLocation, *sourceType, asmjit::x86::r11);
     auto& assembler = context.GetAssembler();
     TypeUtils::NormalizeInteger(assembler, asmjit::x86::rax, sourceWidth, sourceSigned);
     if (!alwaysFits && (overflow == OverflowStrategy::SATURATING || overflow == OverflowStrategy::THROWING)) {
@@ -104,11 +95,9 @@ void CompileNumericCast::Compile(FunctionContext& context, const CHIR::NumericCa
     }
     TypeUtils::NormalizeInteger(assembler, asmjit::x86::rax, targetWidth, targetSigned);
     auto resultLocation = context.GetValueLocation(result);
-    if (!MemoryUtils::Move(context, *resultLocation, RegisterUtils::ToLocation(asmjit::x86::rax),
-        *targetType, asmjit::x86::r11)) {
-        return;
-    }
-    if (normal && !context.GetFailure()) {
+    MemoryUtils::Move(context, *resultLocation, RegisterUtils::ToLocation(asmjit::x86::rax),
+        *targetType, asmjit::x86::r11);
+    if (normal) {
         assembler.jmp(context.GetBlockLabel(normal));
     }
 }
@@ -117,10 +106,8 @@ void CompileNumericCast::CompileFloatCast(FunctionContext& context, const CHIR::
     bool needsConversion, bool targetIsFloat64, const CHIR::Block* normal)
 {
     auto sourceLocation = context.GetValueLocation(source);
-    if (!MemoryUtils::Move(context, RegisterUtils::ToLocation(asmjit::x86::xmm0),
-        *sourceLocation, *source->GetType(), asmjit::x86::rax)) {
-        return;
-    }
+    MemoryUtils::Move(context, RegisterUtils::ToLocation(asmjit::x86::xmm0),
+        *sourceLocation, *source->GetType(), asmjit::x86::rax);
     auto& assembler = context.GetAssembler();
     if (needsConversion && targetIsFloat64) {
         assembler.cvtss2sd(asmjit::x86::xmm0, asmjit::x86::xmm0);
@@ -128,11 +115,9 @@ void CompileNumericCast::CompileFloatCast(FunctionContext& context, const CHIR::
         assembler.cvtsd2ss(asmjit::x86::xmm0, asmjit::x86::xmm0);
     }
     auto resultLocation = context.GetValueLocation(result);
-    if (!MemoryUtils::Move(context, *resultLocation,
-        RegisterUtils::ToLocation(asmjit::x86::xmm0), *result->GetType(), asmjit::x86::rax)) {
-        return;
-    }
-    if (normal && !context.GetFailure()) {
+    MemoryUtils::Move(context, *resultLocation,
+        RegisterUtils::ToLocation(asmjit::x86::xmm0), *result->GetType(), asmjit::x86::rax);
+    if (normal) {
         assembler.jmp(context.GetBlockLabel(normal));
     }
 }

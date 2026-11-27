@@ -6,49 +6,19 @@
 
 #include "FunctionResolver.h"
 
-#include "cangjie/Utils/CheckUtils.h"
-
-#include <exception>
-#include <utility>
+#include "../JitAssert.h"
 
 namespace Cangjie::JIT::X86_64 {
-CompilationResult FunctionResolver::Resolve(FunctionRecord& record, Materialize materialize, void* context) const
+CodeAddress FunctionResolver::Resolve(FunctionRecord& record, Materialize materialize, void* context) const
 {
-    if (record.GetState() == FunctionState::UNINITIALIZED) {
-        return CompilationResult::Failure({"lazy call entry is not initialized"});
-    }
-    if (record.GetState() == FunctionState::COMPILING) {
-        return CompilationResult::Failure({"recursive materialization of the same function"});
-    }
+    JIT_ASSERT(record.GetEntryStub() != 0, "lazy call entry is initialized");
+    JIT_ASSERT(record.GetState() != FunctionState::COMPILING,
+        "recursive materialization of the same function");
     if (record.GetState() == FunctionState::READY) {
-        CJC_ASSERT(record.GetCompiledTarget() != 0 && record.GetCompiledTarget() != record.GetEntryStub());
-        return CompilationResult::Success(record.GetCompiledTarget());
+        return record.GetCompiledTarget();
     }
-    if (record.GetState() == FunctionState::FAILED) {
-        return CompilationResult::Failure({record.GetError()});
-    }
-    if (!materialize) {
-        return CompilationResult::Failure({"missing function materializer"});
-    }
-    if (!record.BeginCompilation()) {
-        return CompilationResult::Failure({"function cannot be materialized"});
-    }
-    CJC_ASSERT(record.GetState() == FunctionState::COMPILING);
-
-    try {
-        auto result = [&]() -> CompilationResult {
-            try {
-                return materialize(record.GetFunction(), context);
-            } catch (const std::exception& error) {
-                return CompilationResult::Failure({error.what()});
-            } catch (...) {
-                return CompilationResult::Failure({"function materializer threw an unknown exception"});
-            }
-        }();
-        return record.CompleteCompilation(std::move(result));
-    } catch (...) {
-        record.FailCompilation();
-        throw;
-    }
+    JIT_ASSERT(materialize != nullptr, "function materializer is provided");
+    record.BeginCompilation();
+    return record.CompleteCompilation(materialize(record.GetFunction(), context));
 }
 } // namespace Cangjie::JIT::X86_64
