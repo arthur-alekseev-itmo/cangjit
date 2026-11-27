@@ -1,0 +1,102 @@
+// Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+#ifndef CANGJIE_JIT_X86_64_COMPILERS_CONTEXT_FUNCTION_CONTEXT_H
+#define CANGJIE_JIT_X86_64_COMPILERS_CONTEXT_FUNCTION_CONTEXT_H
+
+#include <asmjit/x86.h>
+
+#include <unordered_map>
+#include <vector>
+
+#include "ExceptionLandingEmitter.h"
+#include "SafepointRecorder.h"
+#include "TypeInfoEmitter.h"
+#include "../../../Runtime/FunctionMetadata.h"
+#include "../../LazyCalls/LazyCallSiteRegistry.h"
+#include "../../RegisterAllocation/Liveness.h"
+#include "../../RegisterAllocation/RegisterAllocation.h"
+#include "../../RegisterAllocation/ValueNumeration.h"
+
+namespace Cangjie::CHIR {
+class Expression;
+class Block;
+class Function;
+class Type;
+class Value;
+}
+
+namespace Cangjie::JIT::X86_64 {
+class GlobalContext;
+
+// Per-function JIT state: emitted code, allocation, metadata, and diagnostics.
+// Also tracks labels and pending work while the function is compiled.
+// AsmJit errors are recorded by the error handler and checked once after
+// emission; a JIT bug or unsupported construct aborts through JIT_ASSERT.
+class FunctionContext final {
+public:
+    FunctionContext(GlobalContext& globalContext, const CHIR::Function* function, ValueNumeration valueNumeration,
+        Liveness liveness, RegisterAllocation registerAllocation) noexcept;
+    void Prepare();
+
+    GlobalContext& GetGlobalContext() const noexcept;
+    asmjit::CodeHolder& GetCode() noexcept;
+    asmjit::x86::Assembler& GetAssembler() noexcept;
+    FunctionMetadata& GetMetadata() noexcept;
+
+    int32_t GetHiddenTypeInfoOffset(size_t index) const noexcept;
+    TypeInfoEmitter& GetTypeInfoEmitter() noexcept { return typeInfoEmitter; }
+    SafepointRecorder& GetSafepointRecorder() noexcept { return safepointRecorder; }
+    ExceptionLandingEmitter& GetExceptionLandingEmitter() noexcept { return exceptionLandingEmitter; }
+    asmjit::Error GetError() const noexcept;
+    asmjit::Label GetBlockLabel(const CHIR::Block* block);
+    asmjit::Label GetEpilogueLabel() const noexcept;
+    const CHIR::Function* GetFunction() const noexcept;
+    std::vector<PendingLazyCallSite>& GetLazyCallSites() noexcept;
+    const ValueNumeration& GetValueNumeration() const noexcept;
+    const Liveness& GetLiveness() const noexcept { return liveness; }
+    const RegisterAllocation& GetRegisterAllocation() const noexcept;
+    const Location* GetValueLocation(const CHIR::Value* value) noexcept;
+
+private:
+    class EmitterErrorHandler final : public asmjit::ErrorHandler {
+    public:
+        void handleError(asmjit::Error emittedError, const char*, asmjit::BaseEmitter*) override
+        {
+            if (firstError == asmjit::kErrorOk) {
+                firstError = emittedError;
+            }
+        }
+
+        asmjit::Error firstError = asmjit::kErrorOk;
+    };
+    void ReserveHiddenTypeInfoSlots() noexcept;
+    void InitializeAssembler();
+
+
+    GlobalContext& globalContext;
+    EmitterErrorHandler emitterErrorHandler;
+    asmjit::CodeHolder code;
+    asmjit::x86::Assembler assembler;
+    asmjit::Error error;
+    FunctionMetadata metadata;
+    SafepointRecorder safepointRecorder{*this};
+    ExceptionLandingEmitter exceptionLandingEmitter{*this};
+    TypeInfoEmitter typeInfoEmitter{*this};
+    asmjit::Label epilogueLabel;
+    std::unordered_map<const CHIR::Block*, asmjit::Label> blockLabels;
+    const CHIR::Function* function;
+    std::vector<PendingLazyCallSite> lazyCallSites;
+    ValueNumeration valueNumeration;
+    Liveness liveness;
+    RegisterAllocation registerAllocation;
+    size_t hiddenTypeInfoBase = 0;
+    size_t hiddenTypeInfoCount = 0;
+};
+
+} // namespace Cangjie::JIT::X86_64
+
+#endif // CANGJIE_JIT_X86_64_COMPILERS_CONTEXT_FUNCTION_CONTEXT_H

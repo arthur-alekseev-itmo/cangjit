@@ -352,6 +352,9 @@ OPTION("--enable-local-mode", ENABLE_LOCAL_MODE, FLAG, { BACKEND(CJNATIVE) },
     { GROUP(GLOBAL) COMMA GROUP(VISIBLE) }, nullptr, {}, MULTIPLE_OCCURRENCE,
     "Enables experimental support for local mode")
 #endif
+OPTION("--jit", JIT, FLAG, { BACKEND(CJNATIVE) },
+    { GROUP(GLOBAL) COMMA GROUP(STABLE) COMMA GROUP(VISIBLE) }, nullptr, {}, MULTIPLE_OCCURRENCE,
+    "Use the experimental in-process JIT")
 OPTION("--dump-ast", DUMP_AST, FLAG, { BACKEND(ALL) },
     { GROUP(GLOBAL) COMMA GROUP(STABLE) COMMA GROUP(VISIBLE) }, nullptr, {}, MULTIPLE_OCCURRENCE,
     "Dump human readable AST when compiling for debug")

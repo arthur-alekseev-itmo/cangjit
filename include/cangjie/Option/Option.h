@@ -475,6 +475,7 @@ public:
     std::string outputObjCGenDir = "";
 
     std::vector<std::string> importPaths; /**< .cjo search paths */
+    std::vector<std::string> librarySearchPaths; /**< -L library search paths */
 #ifdef CANGJIE_CODEGEN_CJNATIVE_BACKEND
     std::vector<std::string> pluginPaths; /**< meta-transform plugins */
 #endif
@@ -569,6 +570,8 @@ public:
     bool showUsage = false; /**< Show help when user want to, or error occurs when parsing arguments. */
 
     bool scanDepPkg = false; /**< Get the package(s) which the current package depends on. */
+
+    bool jit = false; /**< Use the experimental in-process JIT. */
 
     bool noSubPkg = false; /**< Whether the package has sub-packages. */
 

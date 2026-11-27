@@ -1,0 +1,28 @@
+// Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+#ifndef CANGJIE_JIT_X86_64_UTILS_REGISTER_UTILS_H
+#define CANGJIE_JIT_X86_64_UTILS_REGISTER_UTILS_H
+
+#include <asmjit/x86.h>
+
+#include "../Location.h"
+
+
+namespace Cangjie::JIT::X86_64 {
+class RegisterUtils final {
+public:
+    // ABI placement and moves only hand out data registers; RBP/RSP and
+    // out-of-range indices are JIT bugs.
+    static asmjit::x86::Gpq Get64BitRegister(GPRegisterType type) noexcept;
+    static asmjit::x86::Xmm GetArgumentSimdRegister(size_t index) noexcept;
+    static Location ToLocation(const asmjit::x86::Gp& reg) noexcept;
+    static Location ToLocation(const asmjit::x86::Xmm& reg) noexcept;
+    static bool IsDataRegister(const asmjit::x86::Gp& reg) noexcept;
+};
+} // namespace Cangjie::JIT::X86_64
+
+#endif // CANGJIE_JIT_X86_64_UTILS_REGISTER_UTILS_H
