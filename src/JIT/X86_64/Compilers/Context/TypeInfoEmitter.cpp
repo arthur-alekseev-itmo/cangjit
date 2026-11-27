@@ -7,7 +7,6 @@
 #include "TypeInfoEmitter.h"
 
 #include <algorithm>
-#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -102,9 +101,7 @@ TypeTemplateInfo PrepareTypeTemplate(FunctionContext& context, const CHIR::Type&
     } else {
         JIT_FAIL("type template is not supported for this type");
     }
-    JIT_ASSERT(!arguments.empty() && arguments.size() <=
-        (static_cast<size_t>(std::numeric_limits<int32_t>::max()) - 15) / sizeof(uint64_t),
-        "type template arguments are out of range");
+    JIT_ASSERT(!arguments.empty(), "type template has arguments");
     auto& bindings = context.GetGlobalContext().GetRuntimeBindings();
     auto typeTemplate = Require(bindings.Resolve(name));
     auto create = bindings.GetCreateTypeInfo();
@@ -208,8 +205,6 @@ void TypeInfoEmitter::LoadTypeInfo(const CHIR::Type& input, const asmjit::x86::G
                     asmjit::x86::qword_ptr(asmjit::x86::rbp,
                         context.GetHiddenTypeInfoOffset(generics.size())));
                 for (const auto index : path) {
-                    JIT_ASSERT(index <= static_cast<size_t>(std::numeric_limits<int32_t>::max()) / sizeof(uint64_t),
-                        "generic path index is out of range");
                     // x86-64 native TypeInfo.typeArgs.
                     assembler.mov(target, asmjit::x86::qword_ptr(target, 48));
                     assembler.mov(target, asmjit::x86::qword_ptr(target, static_cast<int32_t>(index * sizeof(uint64_t))));

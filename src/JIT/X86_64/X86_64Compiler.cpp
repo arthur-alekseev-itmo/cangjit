@@ -9,8 +9,6 @@
 #include "Compilers/Function/CompileFunction.h"
 #include "Compilers/Context/GlobalContext.h"
 #include <Cangjie.h>
-#include <cassert>
-#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <utility>

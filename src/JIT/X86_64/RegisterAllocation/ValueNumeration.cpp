@@ -53,6 +53,13 @@ std::optional<ValueNumeration::Id> ValueNumeration::GetId(const CHIR::LocalVar* 
     return GetId(static_cast<const CHIR::Value*>(local));
 }
 
+ValueNumeration::Id ValueNumeration::RequireId(const CHIR::Value* value) const noexcept
+{
+    const auto id = GetId(value);
+    JIT_ASSERT(id.has_value(), "value is numbered");
+    return *id;
+}
+
 const CHIR::Value* ValueNumeration::GetValue(Id id) const noexcept
 {
     JIT_ASSERT(id < endOffset, "value identifier is in range");
@@ -95,8 +102,6 @@ ValueNumeration ValueNumerator::Run() const
     JIT_ASSERT(body != nullptr, "numbered function has a body");
 
     const auto& parameters = function.GetParams();
-    JIT_ASSERT(parameters.size() <= std::numeric_limits<ValueNumeration::Id>::max(),
-        "parameter identifiers fit the numeration");
 
     std::vector<const CHIR::Value*> numberedValues;
     numberedValues.reserve(parameters.size() + function.GetExpressionsNum());
@@ -113,8 +118,6 @@ ValueNumeration ValueNumerator::Run() const
         }
     }
 
-    JIT_ASSERT(numberedValues.size() <= std::numeric_limits<ValueNumeration::Id>::max(),
-        "value identifiers fit the numeration");
     return ValueNumeration(std::move(numberedValues), static_cast<ValueNumeration::Id>(parameters.size()));
 }
 

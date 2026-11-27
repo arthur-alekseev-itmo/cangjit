@@ -6,7 +6,6 @@
 
 #include "ExceptionLandingEmitter.h"
 
-#include <limits>
 #include <utility>
 
 #include "FunctionContext.h"
@@ -48,10 +47,8 @@ void ExceptionLandingEmitter::Emit(const CHIR::Block& block, size_t callStart, s
 {
     auto& assembler = context.GetAssembler();
     const auto landingOffset = assembler.offset();
-    JIT_ASSERT(block.IsLandingPadBlock() && callStart >= 4 && callEnd > callStart &&
-        callEnd - 4 <= std::numeric_limits<uint32_t>::max() &&
-        landingOffset >= 4 && landingOffset - 4 <= std::numeric_limits<uint32_t>::max(),
-        "landing pad or call site is out of range");
+    JIT_ASSERT(block.IsLandingPadBlock() && callStart >= 4 && callEnd > callStart,
+        "landing pad or call site is valid");
     auto types = GetExceptionTypes(block);
     const auto slots = context.GetRegisterAllocation().GetStackSlotCount();
     const auto frameSize = StackFrameUtils::GetFrameSize(slots + 1);

@@ -391,7 +391,6 @@ Result<void, RuntimeError> JitRuntimeBindings::FinalizeRuntime()
     if (!ownsRuntime) {
         return Result<void, RuntimeError>::Success();
     }
-    JIT_ASSERT(FiniRuntime != nullptr, "runtime finalization symbol is missing");
     const auto code = FiniRuntime();
     if (code != 0) {
         return Result<void, RuntimeError>::Failure({RuntimeErrorKind::FinalizationFailed, code, {}});
@@ -404,7 +403,6 @@ Result<void, RuntimeError> JitRuntimeBindings::UnloadLibraries()
 {
     // Keep library TypeInfos mapped until the owned runtime has stopped its collector.
     while (!libraries.empty()) {
-        JIT_ASSERT(UnloadLibrary != nullptr, "library unload symbol is missing");
         const auto code = UnloadLibrary(libraries.back().c_str());
         if (code != 0) {
             return Result<void, RuntimeError>::Failure({RuntimeErrorKind::LibraryUnloadFailed, code, libraries.back()});

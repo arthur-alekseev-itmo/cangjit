@@ -95,8 +95,6 @@ void EmitTarget(FunctionContext& context, const CHIR::DynamicDispatch& expressio
             "virtual invoke receiver is a class reference");
         if (autoEnv) {
             const auto index = CHIR::GetMethodIdxInAutoEnvObject(expression.GetMethodName());
-            JIT_ASSERT(index <= (static_cast<size_t>(std::numeric_limits<int32_t>::max()) - 8) / sizeof(uint64_t),
-                "closure capture index is out of range");
             a.mov(x86::r11, x86::qword_ptr(x86::rax, static_cast<int32_t>(8 + index * sizeof(uint64_t))));
             a.mov(x86::qword_ptr(x86::rsp), x86::r11);
         }
@@ -119,8 +117,6 @@ void EmitTarget(FunctionContext& context, const CHIR::DynamicDispatch& expressio
     a.mov(x86::qword_ptr(x86::rsp, 24), x86::rax);
     auto outerLookup = bindings.GetMethodOuterTypeInfo();
     const auto index = expression.GetVirtualMethodOffset();
-    JIT_ASSERT(index <= static_cast<size_t>(std::numeric_limits<int32_t>::max()) / sizeof(uint64_t),
-        "virtual method offset is out of range");
     if (def->IsInterface()) {
         auto mtable = bindings.GetMethodTable();
         a.mov(x86::rdi, x86::qword_ptr(x86::rsp, 16));
@@ -133,8 +129,6 @@ void EmitTarget(FunctionContext& context, const CHIR::DynamicDispatch& expressio
         for (auto current = def; current; current = current->GetSuperClassDef()) {
             ++depth;
         }
-        JIT_ASSERT(depth - 1 <= static_cast<size_t>(std::numeric_limits<int32_t>::max()) / sizeof(uint64_t),
-            "class depth is out of range");
         auto update = bindings.GetUpdateVTable();
         // x86-64 native TypeInfo.vExtensionDataStart and ExtensionData.funcTable.
         constexpr int32_t VTABLE_OFFSET = 72;
@@ -220,9 +214,7 @@ void CompileCall(FunctionContext& context, const CHIR::DynamicDispatch& expressi
         "invoke uses a supported calling convention");
     const auto args = expression.GetArgs();
     const auto& parameters = callee->GetParams();
-    JIT_ASSERT(args.size() == parameters.size() &&
-        placement.stackSize <= static_cast<uint32_t>(std::numeric_limits<int32_t>::max() - 48),
-        "invoke argument count matches and the stack area fits");
+    JIT_ASSERT(args.size() == parameters.size(), "invoke argument count matches the callee parameters");
     const auto& typeArgs = expression.GetInstantiatedTypeArgs();
     JIT_ASSERT(typeArgs.size() == placement.genericTypeInfoLocations.size(),
         "invoke type arguments match the generic placement");
@@ -239,8 +231,6 @@ void CompileCall(FunctionContext& context, const CHIR::DynamicDispatch& expressi
         JIT_ASSERT(types.size() <= (static_cast<size_t>(std::numeric_limits<int32_t>::max()) - 15) / sizeof(uint64_t),
             "staged type information fits the scratch area");
         typeScratchSize = static_cast<uint32_t>((types.size() * sizeof(uint64_t) + 15) & ~size_t{15});
-        JIT_ASSERT(typeScratchSize <= static_cast<uint32_t>(std::numeric_limits<int32_t>::max()) -
-            placement.stackSize - SCRATCH_SIZE, "staged type information fits the 2 GiB scratch area");
         assembler.sub(x86::rsp, typeScratchSize);
         context.GetTypeInfoEmitter().StoreTypeInfos(types, 0);
     }

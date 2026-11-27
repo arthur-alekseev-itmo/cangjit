@@ -125,9 +125,8 @@ const RegisterAllocation& FunctionContext::GetRegisterAllocation() const noexcep
 
 const Location* FunctionContext::GetValueLocation(const CHIR::Value* value) noexcept
 {
-    const auto id = valueNumeration.GetId(value);
-    JIT_ASSERT(id, "value is missing from the numeration");
-    return &registerAllocation.GetLocation(*id);
+    const auto id = valueNumeration.RequireId(value);
+    return &registerAllocation.GetLocation(id);
 }
 
 

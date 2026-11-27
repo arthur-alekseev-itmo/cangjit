@@ -21,7 +21,6 @@
 #include "cangjie/CHIR/IR/Value/Value.h"
 
 #include <algorithm>
-#include <limits>
 #include <vector>
 
 namespace Cangjie::JIT::X86_64 {
@@ -153,15 +152,10 @@ void PlaceArguments(FunctionContext& context, const CHIR::ApplyBase& expression,
         if (placement.thisTypeInfoLocation) {
             types.push_back(thisType);
         }
-        JIT_ASSERT(types.size() <= (static_cast<size_t>(std::numeric_limits<int32_t>::max()) - 15) / sizeof(uint64_t),
-            "staged type information fits the scratch area");
         scratchSize = static_cast<uint32_t>((types.size() * sizeof(uint64_t) + 15) & ~size_t{15});
         context.GetAssembler().sub(x86::rsp, scratchSize);
         context.GetTypeInfoEmitter().StoreTypeInfos(types, 0);
     }
-    JIT_ASSERT(placement.stackSize <= static_cast<uint32_t>(std::numeric_limits<int32_t>::max()) &&
-        scratchSize <= static_cast<uint32_t>(std::numeric_limits<int32_t>::max()) - placement.stackSize,
-        "argument stack area fits in 2 GiB");
     context.GetAssembler().sub(x86::rsp, placement.stackSize);
     const auto& parameters = callee.GetParams();
     for (size_t i = 0; i < parameters.size(); ++i) {

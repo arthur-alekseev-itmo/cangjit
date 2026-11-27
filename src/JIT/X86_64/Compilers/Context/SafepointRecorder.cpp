@@ -14,27 +14,24 @@
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 
 #include <functional>
-#include <limits>
 
 namespace Cangjie::JIT::X86_64 {
 void SafepointRecorder::Record(const CHIR::Expression& expression, const CHIR::Value* temporaryRoot)
 {
     const auto offset = context.GetAssembler().offset();
-    JIT_ASSERT(offset >= 4 && offset - 4 <= std::numeric_limits<uint32_t>::max(),
-        "safepoint program counter is out of range");
     auto roots = ComputeSafepointLiveness(
         *context.GetFunction(), context.GetValueNumeration(), context.GetRegisterAllocation(),
         context.GetLiveness(), expression);
     if (temporaryRoot) {
         auto& numeration = context.GetValueNumeration();
         auto& allocation = context.GetRegisterAllocation();
-        const auto id = numeration.GetId(temporaryRoot);
-        JIT_ASSERT(id && *id < allocation.GetLocationCount(), "temporary root is numbered");
-        const auto slot = allocation.GetLocation(*id).AsStack();
+        const auto id = numeration.RequireId(temporaryRoot);
+        JIT_ASSERT(id < allocation.GetLocationCount(), "temporary root is numbered");
+        const auto slot = allocation.GetLocation(id).AsStack();
         JIT_ASSERT(slot != nullptr, "temporary root occupies a stack slot");
         for (ValueNumeration::Id i = 0; i < allocation.GetLocationCount(); ++i) {
             auto other = allocation.GetLocation(i).AsStack();
-            JIT_ASSERT(i == *id || !other || other->index != slot->index,
+            JIT_ASSERT(i == id || !other || other->index != slot->index,
                 "temporary root must not share a slot with a live value");
             JIT_ASSERT(allocation.GetAllocationSlot(i) != slot->index,
                 "temporary root must not overlap an allocation slot");

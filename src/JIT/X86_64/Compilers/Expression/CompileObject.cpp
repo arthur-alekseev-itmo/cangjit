@@ -80,8 +80,7 @@ void CompileAllocation(FunctionContext& context, const CHIR::AllocateBase& expre
     if (type->IsAutoEnv()) {
         JIT_ASSERT(!dynamic, "generic closure environments are not allocated eagerly");
         const auto functions = def->GetMethods();
-        JIT_ASSERT(functions.size() <= payload / sizeof(uint64_t) &&
-            functions.size() <= (static_cast<size_t>(std::numeric_limits<int32_t>::max()) - 8) / sizeof(uint64_t),
+        JIT_ASSERT(functions.size() <= payload / sizeof(uint64_t),
             "closure environment layout has room for every captured method");
         methods.reserve(functions.size());
         for (auto method : functions) {

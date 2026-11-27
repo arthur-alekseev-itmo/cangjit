@@ -8,7 +8,6 @@
 #define CANGJIE_JIT_X86_64_REGISTER_ALLOCATION_LIVENESS_H
 
 #include <iosfwd>
-#include <optional>
 #include <unordered_map>
 #include <vector>
 

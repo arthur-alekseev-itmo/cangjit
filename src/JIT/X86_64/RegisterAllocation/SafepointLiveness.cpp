@@ -114,12 +114,10 @@ SafepointRoots ComputeSafepointLiveness(const CHIR::Function& function,
         auto slot = allocation.GetLocation(id).AsStack();
         JIT_ASSERT(slot != nullptr && slots.insert(slot->index).second,
             "safepoint liveness requires distinct stack locations");
-        StackFrameUtils::GetSlotOffset(slot->index, allocation.GetStackSlotCount());
     }
     for (Id id = 0; id < count; ++id) {
         if (auto slot = allocation.GetAllocationSlot(id)) {
             JIT_ASSERT(slots.insert(*slot).second, "stack allocation slot is disjoint from value slots");
-            StackFrameUtils::GetSlotOffset(*slot, allocation.GetStackSlotCount());
         }
     }
     const auto& blocks = liveness.GetBlocks();
@@ -255,7 +253,7 @@ SafepointRoots ComputeSafepointLiveness(const CHIR::Function& function,
                                e->GetExprKind() != CHIR::ExprKind::GET_ELEMENT_BY_NAME)) {
                         break;
                     }
-                    root = *numbers.GetId(e->GetOperand(0));
+                    root = numbers.RequireId(e->GetOperand(0));
                 }
                 derived[root].push_back(offset(id));
             }

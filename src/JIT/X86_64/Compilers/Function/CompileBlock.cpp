@@ -78,10 +78,9 @@ void CompileAllocate(FunctionContext& context, const CHIR::Allocate& expression)
     auto result = expression.GetResult();
     JIT_ASSERT(MatchesReference(result, expression.GetType()),
         "allocation requires a supported scalar type and a stack slot");
-    const auto id = context.GetValueNumeration().GetId(result);
-    JIT_ASSERT(id, "allocation result is numbered");
+    const auto id = context.GetValueNumeration().RequireId(result);
     const auto& allocation = context.GetRegisterAllocation();
-    const auto slot = allocation.GetAllocationSlot(*id);
+    const auto slot = allocation.GetAllocationSlot(id);
     JIT_ASSERT(slot, "allocation result has a stack slot");
     const auto offset = StackFrameUtils::GetSlotOffset(*slot, allocation.GetStackSlotCount());
     context.GetAssembler().lea(asmjit::x86::rax, asmjit::x86::ptr(asmjit::x86::rbp, offset));

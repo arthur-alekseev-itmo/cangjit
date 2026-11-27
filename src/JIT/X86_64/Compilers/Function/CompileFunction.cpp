@@ -163,8 +163,8 @@ void CompileFunction::SaveReturnValue(FunctionContext& context, const ParameterP
         "function return uses the supported ABI placement");
     auto result = function.GetReturnValue();
     JIT_ASSERT(result != nullptr, "function has a return value");
-    const auto id = context.GetValueNumeration().GetId(result);
-    const auto slot = id ? context.GetRegisterAllocation().GetAllocationSlot(*id) : std::nullopt;
+    const auto id = context.GetValueNumeration().RequireId(result);
+    const auto slot = context.GetRegisterAllocation().GetAllocationSlot(id);
     JIT_ASSERT(slot && TypeUtils::TypeWidth(*type) && type->GetTypeKind() != CHIR::Type::TYPE_FLOAT16,
         "function return value has a supported scalar stack slot");
     MemoryUtils::Move(context, *placement.returnLocation, Location::Stack(*slot), *type, asmjit::x86::rax);
@@ -198,8 +198,8 @@ void CompileFunction::SaveParameter(FunctionContext& context, const ParameterPla
     const CHIR::Parameter* parameter) const
 {
     auto type = parameter->GetType();
-    const auto id = context.GetValueNumeration().GetId(parameter);
-    const auto& destination = context.GetRegisterAllocation().GetLocation(*id);
+    const auto id = context.GetValueNumeration().RequireId(parameter);
+    const auto& destination = context.GetRegisterAllocation().GetLocation(id);
     const auto& source = placements.locations.at(parameter);
     MemoryUtils::Move(context, destination, source, *type, asmjit::x86::rax);
 }

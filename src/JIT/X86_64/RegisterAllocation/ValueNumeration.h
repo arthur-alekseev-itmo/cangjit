@@ -30,6 +30,8 @@ public:
     std::optional<Id> GetId(const CHIR::Value* value) const noexcept;
     std::optional<Id> GetId(const CHIR::Parameter* parameter) const noexcept;
     std::optional<Id> GetId(const CHIR::LocalVar* local) const noexcept;
+    // Total lookup: aborts when the value is not numbered.
+    Id RequireId(const CHIR::Value* value) const noexcept;
     const CHIR::Value* GetValue(Id id) const noexcept;
     void Dump(std::ostream& output) const;
 

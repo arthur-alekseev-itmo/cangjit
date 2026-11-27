@@ -17,7 +17,6 @@
 #include "cangjie/CHIR/IR/Type/Type.h"
 
 #include <cstdint>
-#include <string>
 
 namespace Cangjie::JIT::X86_64 {
 void CompileNumericCast::Compile(FunctionContext& context, const CHIR::NumericCastBase& expression,
