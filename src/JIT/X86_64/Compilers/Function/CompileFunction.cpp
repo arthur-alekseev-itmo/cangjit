@@ -176,7 +176,7 @@ bool CompileFunction::WriteMetadata(FunctionContext& context, CodeAddress base, 
     const auto& encoded = metadata.Value();
     publishedMetadataSize = encoded.descriptor.size();
     asmjit::JitAllocator::Span span;
-    auto* allocator = globalContext.GetRuntime().allocator();
+    auto allocator = globalContext.GetRuntime().allocator();
     if (publishedMetadataSize != metadataSize || allocator->query(span, reinterpret_cast<void*>(base)) != asmjit::kErrorOk ||
         allocator->write(span, metadataOffset, encoded.descriptor.data(), publishedMetadataSize) != asmjit::kErrorOk ||
         allocator->write(span, 0, encoded.prefix.data(), encoded.prefix.size()) != asmjit::kErrorOk) {
@@ -236,7 +236,7 @@ void CompileFunction::MakeEpilogue(FunctionContext& context, const ParameterPlac
 
 bool CompileFunction::SaveReturnValue(FunctionContext& context, const ParameterPlacement& placement) const
 {
-    const auto* type = function.GetReturnType();
+    auto type = function.GetReturnType();
     if (type->IsUnit() || type->IsVoid() || type->IsNothing()) {
         return true;
     }
@@ -244,7 +244,7 @@ bool CompileFunction::SaveReturnValue(FunctionContext& context, const ParameterP
         context.Fail(JitFailureKind::UnsupportedReturnType);
         return false;
     }
-    const auto* result = function.GetReturnValue();
+    auto result = function.GetReturnValue();
     const auto id = context.GetValueNumeration().GetId(result);
     const auto slot = id ? context.GetRegisterAllocation().GetAllocationSlot(*id) : std::nullopt;
     if (!slot || !TypeUtils::TypeWidth(*type) || type->GetTypeKind() == CHIR::Type::TYPE_FLOAT16) {
@@ -272,7 +272,7 @@ void CompileFunction::Compile(FunctionContext& context) const
     }
     auto& assembler = context.GetAssembler();
     assembler.jmp(context.GetBlockLabel(function.GetBody()->GetEntryBlock()));
-    for (const auto* block : function.GetBody()->GetBlocks()) {
+    for (auto block : function.GetBody()->GetBlocks()) {
         CompileBlock::Compile(context, *block);
         if (context.GetFailure() || context.GetError() != asmjit::kErrorOk) {
             return;
@@ -283,7 +283,7 @@ void CompileFunction::Compile(FunctionContext& context) const
 
 bool CompileFunction::SaveParameters(FunctionContext& context, const ParameterPlacement& placements) const
 {
-    for (const auto* parameter : function.GetParams()) {
+    for (auto parameter : function.GetParams()) {
         if (!SaveParameter(context, placements, parameter)) {
             return false;
         }
@@ -294,7 +294,7 @@ bool CompileFunction::SaveParameters(FunctionContext& context, const ParameterPl
 bool CompileFunction::SaveParameter(FunctionContext& context, const ParameterPlacement& placements,
     const CHIR::Parameter* parameter) const
 {
-    const auto* type = parameter->GetType();
+    auto type = parameter->GetType();
     const auto id = context.GetValueNumeration().GetId(parameter);
     const auto& destination = context.GetRegisterAllocation().GetLocation(*id);
     const auto& source = placements.locations.at(parameter);
@@ -329,7 +329,7 @@ bool CompileFunction::SaveHiddenTypeInfoLocation(FunctionContext& context, const
         return false;
     }
     auto& a = context.GetAssembler();
-    if (const auto* reg = location.AsGpRegister()) {
+    if (auto reg = location.AsGpRegister()) {
         const auto source = RegisterUtils::Get64BitRegister(reg->type);
         if (!source) {
             context.Fail(JitFailureKind::UnsupportedCallingConvention);
@@ -338,7 +338,7 @@ bool CompileFunction::SaveHiddenTypeInfoLocation(FunctionContext& context, const
         a.mov(asmjit::x86::qword_ptr(asmjit::x86::rbp, *offset), *source);
         return true;
     }
-    const auto* stack = location.AsIncomingStack();
+    auto stack = location.AsIncomingStack();
     if (!stack) {
         context.Fail(JitFailureKind::UnsupportedCallingConvention);
         return false;

@@ -67,7 +67,7 @@ ParameterPlacement ComputePlacement(const CHIR::Function& function,
     const CHIR::FuncType* functionType, size_t genericCount, bool isStatic, bool allowBasePointer)
 {
     const bool isC = functionType->IsCFunc();
-    const auto* returnType = functionType->GetReturnType();
+    auto returnType = functionType->GetReturnType();
     const auto parameterTypes = functionType->GetParamTypes();
     const auto& parameters = function.GetParams();
     size_t integerIndex = 0;
@@ -95,8 +95,8 @@ ParameterPlacement ComputePlacement(const CHIR::Function& function,
     placement.locations.reserve(parameters.size());
     placement.abiParameterTypes.reserve(parameters.size());
     for (size_t i = 0; i < parameters.size(); ++i) {
-        const auto* parameter = parameters[i];
-        const auto* type = parameterTypes[i];
+        auto parameter = parameters[i];
+        auto type = parameterTypes[i];
         placement.abiParameterTypes.emplace(parameter, type);
         if (Classify(*type, isC) == ArgumentClass::SIMD) {
             const auto location = simdIndex < SIMD_REGISTER_COUNT
@@ -131,8 +131,8 @@ ParameterPlacement ComputePlacement(const CHIR::Function& function,
 
 ParameterPlacement SystemVCallingConvention::GetNativeParameterPlacement(const CHIR::Function& function)
 {
-    const auto* overrideType = function.Get<CHIR::OverrideSrcFuncType>();
-    const auto* functionType = overrideType ? overrideType : function.GetFuncType();
+    auto overrideType = function.Get<CHIR::OverrideSrcFuncType>();
+    auto functionType = overrideType ? overrideType : function.GetFuncType();
     const auto& generics = function.GetGenericTypeParams();
     return ComputePlacement(function, functionType, generics.size(), function.TestAttr(CHIR::Attribute::STATIC), true);
 }

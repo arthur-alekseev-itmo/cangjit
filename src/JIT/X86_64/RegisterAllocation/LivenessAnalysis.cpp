@@ -70,7 +70,7 @@ void LivenessAnalysis::Transfer(const CHIR::Expression& expression, const ValueN
 
 void LivenessAnalysis::CollectBlocks(const CHIR::Function& function)
 {
-    const auto* body = function.GetBody();
+    auto body = function.GetBody();
     assert(body != nullptr);
     blocks = body->GetAllBlocks();
     blocks.erase(std::remove_if(blocks.begin(), blocks.end(),
@@ -88,7 +88,7 @@ void LivenessAnalysis::Compute(const ValueNumeration& numeration)
     std::vector<size_t> successorOffsets(blocks.size() + 1);
     std::vector<size_t> successorIndices;
     for (size_t i = 0; i < blocks.size(); ++i) {
-        for (const auto* successor : blocks[i]->GetSuccessors()) {
+        for (auto successor : blocks[i]->GetSuccessors()) {
             const auto found = blockIndices.find(successor);
             CJC_ASSERT(found != blockIndices.end());
             if (found != blockIndices.end()) {
@@ -102,9 +102,9 @@ void LivenessAnalysis::Compute(const ValueNumeration& numeration)
     liveIns.resize(matrixSize);
     liveOuts.resize(matrixSize);
     for (size_t i = 0; i < blocks.size(); ++i) {
-        auto* blockUses = GetRow(uses, i, wordsPerBlock);
-        auto* blockDefinitions = GetRow(definitions, i, wordsPerBlock);
-        for (const auto* expression : blocks[i]->GetExpressions()) {
+        auto blockUses = GetRow(uses, i, wordsPerBlock);
+        auto blockDefinitions = GetRow(definitions, i, wordsPerBlock);
+        for (auto expression : blocks[i]->GetExpressions()) {
             if (!IsRuntimeExpression(*expression)) {
                 continue;
             }
@@ -127,15 +127,15 @@ void LivenessAnalysis::Compute(const ValueNumeration& numeration)
             const size_t block = reverse - 1;
             std::fill(nextOut.begin(), nextOut.end(), Word{0});
             for (size_t i = successorOffsets[block]; i < successorOffsets[block + 1]; ++i) {
-                const auto* successor = GetRow(liveIns, successorIndices[i], wordsPerBlock);
+                auto successor = GetRow(liveIns, successorIndices[i], wordsPerBlock);
                 for (size_t word = 0; word < wordsPerBlock; ++word) {
                     nextOut[word] |= successor[word];
                 }
             }
-            const auto* blockUses = GetRow(uses, block, wordsPerBlock);
-            const auto* blockDefinitions = GetRow(definitions, block, wordsPerBlock);
-            auto* liveIn = GetRow(liveIns, block, wordsPerBlock);
-            auto* liveOut = GetRow(liveOuts, block, wordsPerBlock);
+            auto blockUses = GetRow(uses, block, wordsPerBlock);
+            auto blockDefinitions = GetRow(definitions, block, wordsPerBlock);
+            auto liveIn = GetRow(liveIns, block, wordsPerBlock);
+            auto liveOut = GetRow(liveOuts, block, wordsPerBlock);
             for (size_t word = 0; word < wordsPerBlock; ++word) {
                 nextIn[word] = blockUses[word] | (nextOut[word] & ~blockDefinitions[word]);
                 if (liveIn[word] != nextIn[word] || liveOut[word] != nextOut[word]) {
@@ -156,30 +156,30 @@ Liveness LivenessAnalysis::MakeLiveness(const ValueNumeration& numeration)
     result.blockIndices = std::move(blockIndices);
     result.blockOffsets.reserve(result.blocks.size());
     size_t rowCount = 0;
-    for (const auto* block : result.blocks) {
+    for (auto block : result.blocks) {
         result.blockOffsets.push_back(rowCount);
         rowCount += block->GetExpressionsNum() + 1;
     }
     result.expressionIndices.reserve(rowCount - result.blocks.size());
     result.bitmaps.resize(rowCount * wordsPerBlock);
     for (size_t block = 0; block < result.blocks.size(); ++block) {
-        const auto* chirBlock = result.blocks[block];
+        auto chirBlock = result.blocks[block];
         const size_t count = chirBlock->GetExpressionsNum();
         const size_t first = result.blockOffsets[block];
         if (wordsPerBlock != 0) {
-            const auto* liveOut = GetRow(liveOuts, block, wordsPerBlock);
-            auto* exit = GetRow(result.bitmaps, first + count, wordsPerBlock);
+            auto liveOut = GetRow(liveOuts, block, wordsPerBlock);
+            auto exit = GetRow(result.bitmaps, first + count, wordsPerBlock);
             std::copy(liveOut, liveOut + wordsPerBlock, exit);
         }
         for (size_t i = count; i > 0; --i) {
-            const auto* expression = chirBlock->GetExpressionByIdx(i - 1);
+            auto expression = chirBlock->GetExpressionByIdx(i - 1);
             const size_t row = first + i - 1;
             const bool inserted = result.expressionIndices.emplace(expression, row).second;
             assert(inserted);
             (void)inserted;
-            auto* before = GetRow(result.bitmaps, row, wordsPerBlock);
+            auto before = GetRow(result.bitmaps, row, wordsPerBlock);
             if (wordsPerBlock != 0) {
-                const auto* after = GetRow(result.bitmaps, row + 1, wordsPerBlock);
+                auto after = GetRow(result.bitmaps, row + 1, wordsPerBlock);
                 std::copy(after, after + wordsPerBlock, before);
             }
             Transfer(*expression, numeration, before);

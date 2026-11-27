@@ -12,7 +12,7 @@
 namespace Cangjie::JIT::X86_64 {
 void CompileGoTo::Compile(FunctionContext& ctx, const CHIR::GoTo& expr)
 {
-    auto* destination = expr.GetDestination();
+    auto destination = expr.GetDestination();
     if (!destination) {
         ctx.Fail(JitFailureKind::MissingGoToDestination);
         return;

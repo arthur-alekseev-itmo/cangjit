@@ -20,19 +20,21 @@ void CompileUnaryExpression::Compile(FunctionContext& ctx, const CHIR::UnaryExpr
     const CHIR::Block* normal, const CHIR::Block* unwind)
 {
     using K = CHIR::UnaryExprKind;
-    const auto* operand = expr.GetOperand();
-    const auto* result = expr.GetResult();
+    auto operand = expr.GetOperand();
+    auto result = expr.GetResult();
     if (!operand || !result || !operand->GetType() || !result->GetType() ||
         operand->GetType()->GetTypeKind() != result->GetType()->GetTypeKind()) {
         ctx.Fail(JitFailureKind::InvalidUnaryOperandOrType);
         return;
     }
-    const auto* type = operand->GetType();
+    auto type = operand->GetType();
     const auto width = TypeUtils::IntegerWidth(*type);
     const auto kind = expr.GetOpKind();
     const bool floating = TypeUtils::IsFloating(*type);
     if (floating && kind == K::NEG) {
-        if (!MemoryUtils::LoadValue(ctx, operand, asmjit::x86::rax)) {
+        auto operandLocation = ctx.GetValueLocation(operand);
+        if (!MemoryUtils::Move(ctx, RegisterUtils::ToLocation(asmjit::x86::rax),
+            *operandLocation, *type, asmjit::x86::r11)) {
             return;
         }
         auto& a = ctx.GetAssembler();
@@ -40,7 +42,11 @@ void CompileUnaryExpression::Compile(FunctionContext& ctx, const CHIR::UnaryExpr
             ? uint64_t{1} << 31 : uint64_t{1} << 63;
         a.mov(asmjit::x86::rcx, asmjit::imm(sign));
         a.xor_(asmjit::x86::rax, asmjit::x86::rcx);
-        MemoryUtils::StoreValue(ctx, result, asmjit::x86::rax);
+        auto resultLocation = ctx.GetValueLocation(result);
+        if (!MemoryUtils::Move(ctx, *resultLocation,
+            RegisterUtils::ToLocation(asmjit::x86::rax), *result->GetType(), asmjit::x86::r11)) {
+            return;
+        }
         if (normal && !ctx.GetFailure()) {
             a.jmp(ctx.GetBlockLabel(normal));
         }
@@ -59,7 +65,9 @@ void CompileUnaryExpression::Compile(FunctionContext& ctx, const CHIR::UnaryExpr
         ctx.Fail(JitFailureKind::UnsupportedUnaryOverflow);
         return;
     }
-    if (!MemoryUtils::LoadValue(ctx, operand, asmjit::x86::rax)) {
+    auto operandLocation = ctx.GetValueLocation(operand);
+    if (!MemoryUtils::Move(ctx, RegisterUtils::ToLocation(asmjit::x86::rax),
+        *operandLocation, *type, asmjit::x86::r11)) {
         return;
     }
     auto& a = ctx.GetAssembler();
@@ -109,7 +117,11 @@ void CompileUnaryExpression::Compile(FunctionContext& ctx, const CHIR::UnaryExpr
     if (width) {
         TypeUtils::NormalizeInteger(a, asmjit::x86::rax, width, type->IsSignedInteger());
     }
-    MemoryUtils::StoreValue(ctx, result, asmjit::x86::rax);
+    auto resultLocation = ctx.GetValueLocation(result);
+    if (!MemoryUtils::Move(ctx, *resultLocation, RegisterUtils::ToLocation(asmjit::x86::rax),
+        *result->GetType(), asmjit::x86::r11)) {
+        return;
+    }
     if (normal && !ctx.GetFailure()) {
         a.jmp(ctx.GetBlockLabel(normal));
     }

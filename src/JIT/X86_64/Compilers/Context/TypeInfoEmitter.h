@@ -9,6 +9,9 @@
 
 #include <asmjit/x86.h>
 
+#include <cstdint>
+#include <vector>
+
 namespace Cangjie::CHIR { class Type; }
 
 namespace Cangjie::JIT::X86_64 {
@@ -19,6 +22,7 @@ public:
     explicit TypeInfoEmitter(FunctionContext& context) noexcept : context(context) {}
     void* GetConcreteTypeInfo(const CHIR::Type& type);
     bool LoadTypeInfo(const CHIR::Type& type, const asmjit::x86::Gp& target);
+    bool StoreTypeInfos(const std::vector<const CHIR::Type*>& types, int32_t rspOffset);
 
 private:
     FunctionContext& context;

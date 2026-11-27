@@ -32,8 +32,8 @@ inline const char* GetJitFailureMessage(JitFailureKind kind) noexcept
 #define JIT_FAILURE(name, message) case JitFailureKind::name: return message;
 #include "JitFailures.inc"
 #undef JIT_FAILURE
+        default: return "unknown JIT failure";
     }
-    return "unknown JIT failure";
 }
 } // namespace Cangjie::JIT::X86_64
 

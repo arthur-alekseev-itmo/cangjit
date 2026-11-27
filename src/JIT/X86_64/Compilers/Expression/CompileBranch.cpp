@@ -7,6 +7,7 @@
 #include "CompileBranch.h"
 
 #include "../../Utils/MemoryUtils.h"
+#include "../../Utils/RegisterUtils.h"
 #include "../Context/FunctionContext.h"
 #include "cangjie/CHIR/IR/Expression/Terminator.h"
 #include "cangjie/CHIR/IR/Type/Type.h"
@@ -15,14 +16,16 @@
 namespace Cangjie::JIT::X86_64 {
 void CompileBranch::Compile(FunctionContext& ctx, const CHIR::Branch& expr)
 {
-    auto* condition = expr.GetCondition();
-    auto* trueBlock = expr.GetTrueBlock();
-    auto* falseBlock = expr.GetFalseBlock();
+    auto condition = expr.GetCondition();
+    auto trueBlock = expr.GetTrueBlock();
+    auto falseBlock = expr.GetFalseBlock();
     if (!condition || !condition->GetType() || !condition->GetType()->IsBoolean() || !trueBlock || !falseBlock) {
         ctx.Fail(JitFailureKind::InvalidBranch);
         return;
     }
-    if (!MemoryUtils::LoadValue(ctx, condition, asmjit::x86::rax)) {
+    const auto source = ctx.GetValueLocation(condition);
+    const auto destination = RegisterUtils::ToLocation(asmjit::x86::rax);
+    if (!MemoryUtils::Move(ctx, destination, *source, *condition->GetType(), asmjit::x86::r11)) {
         return;
     }
     auto& assembler = ctx.GetAssembler();

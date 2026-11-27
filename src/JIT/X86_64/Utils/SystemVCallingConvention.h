@@ -35,7 +35,7 @@ struct ParameterPlacement {
     std::optional<Location> thisTypeInfoLocation;
     std::optional<Location> returnLocation;
     bool indirectReturn = false;
-    uint32_t stackSize = 0;
+    size_t stackSize = 0;
 };
 
 class SystemVCallingConvention final {

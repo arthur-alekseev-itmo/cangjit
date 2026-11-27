@@ -25,7 +25,7 @@ const void* StringLiteralPool::GetOrCreate(std::string_view text)
     if (found != literals.end()) {
         return found->second.data();
     }
-    auto* typeInfo = GetByteArrayTypeInfo();
+    auto typeInfo = GetByteArrayTypeInfo();
     if (!typeInfo) {
         return nullptr;
     }

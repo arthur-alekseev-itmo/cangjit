@@ -90,7 +90,7 @@ ValueNumerator::ValueNumerator(const CHIR::Function& function) noexcept : functi
 
 ValueNumeration ValueNumerator::Run() const
 {
-    const auto* body = function.GetBody();
+    auto body = function.GetBody();
     assert(body != nullptr);
 
     const auto& parameters = function.GetParams();
@@ -100,12 +100,12 @@ ValueNumeration ValueNumerator::Run() const
     numberedValues.reserve(parameters.size() + function.GetExpressionsNum());
     numberedValues.insert(numberedValues.end(), parameters.begin(), parameters.end());
 
-    for (const auto* block : body->GetAllBlocks()) {
+    for (auto block : body->GetAllBlocks()) {
         if (block->GetFuncOrLambdaBody() != body) {
             continue;
         }
-        for (const auto* expression : block->GetExpressions()) {
-            if (const auto* result = expression->GetResult(); result != nullptr) {
+        for (auto expression : block->GetExpressions()) {
+            if (auto result = expression->GetResult(); result != nullptr) {
                 numberedValues.push_back(result);
             }
         }

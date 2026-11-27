@@ -53,7 +53,7 @@ void X86_64Compiler::Run(const CHIR::Package& package, std::ostream& output) con
         ReportError(output, "JIT: compiler is closed");
         return;
     }
-    const auto* function = FindUserMain(package);
+    auto function = FindUserMain(package);
     if (!function || !ValidateUserMain(*function, output) ||
         !ValidatePackageInitializers(package, output) || !ConfigureRuntime(output)) {
         ReportError(output, "JIT: entrypoint main is not found or is incorrect");
@@ -68,7 +68,7 @@ void X86_64Compiler::Run(const CHIR::Package& package, std::ostream& output) con
 
 const CHIR::Function* X86_64Compiler::FindUserMain(const CHIR::Package& package)
 {
-    for (const auto* function : package.GetGlobalFuncsWithBody()) {
+    for (auto function : package.GetGlobalFuncsWithBody()) {
         if (function->GetIdentifierWithoutPrefix() == USER_MAIN_MANGLED_NAME) {
             return function;
         }
@@ -88,7 +88,7 @@ bool X86_64Compiler::ValidateUserMain(const CHIR::Function& function, std::ostre
 bool X86_64Compiler::ValidatePackageInitializers(const CHIR::Package& package, std::ostream& output)
 {
     // Native entry runs package initializers before user.main.
-    for (const auto* global : package.GetGlobalVars()) {
+    for (auto global : package.GetGlobalVars()) {
         if (!global || global->IsImportedVar() || !global->GetInitFunc()) {
             continue;
         }

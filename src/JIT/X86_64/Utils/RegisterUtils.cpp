@@ -31,6 +31,21 @@ std::optional<asmjit::x86::Xmm> RegisterUtils::GetArgumentSimdRegister(size_t in
     return index < registers.size() ? std::optional<x86::Xmm>(registers[index]) : std::nullopt;
 }
 
+Location RegisterUtils::ToLocation(const asmjit::x86::Gp& reg) noexcept
+{
+    static constexpr std::array<GPRegisterType, 16> types = {
+        GPRegisterType::RAX, GPRegisterType::RCX, GPRegisterType::RDX, GPRegisterType::RBX,
+        GPRegisterType::RSP, GPRegisterType::RBP, GPRegisterType::RSI, GPRegisterType::RDI,
+        GPRegisterType::R8, GPRegisterType::R9, GPRegisterType::R10, GPRegisterType::R11,
+        GPRegisterType::R12, GPRegisterType::R13, GPRegisterType::R14, GPRegisterType::R15};
+    return Location::GpRegister(reg.id(), types[reg.id()], OperandWidth::QWORD);
+}
+
+Location RegisterUtils::ToLocation(const asmjit::x86::Xmm& reg) noexcept
+{
+    return Location::SimdRegister(reg.id(), OperandWidth::QWORD);
+}
+
 bool RegisterUtils::IsDataRegister(const asmjit::x86::Gp& reg) noexcept
 {
     return reg.isGpq() && reg.id() <= asmjit::x86::Gp::kIdR15 &&

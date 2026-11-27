@@ -57,9 +57,9 @@ InterferenceGraph LivenessInterferenceGraphBuilder::Build(const CHIR::Function& 
     const auto nodeCount = numeration.GetValueCount();
     InterferenceGraph graph(nodeCount);
     const auto wordCount = liveness.GetWordCount();
-    for (const auto* block : liveness.GetBlocks()) {
+    for (auto block : liveness.GetBlocks()) {
         for (size_t i = 0; i < block->GetExpressionsNum(); ++i) {
-            const auto* expression = block->GetExpressionByIdx(i);
+            auto expression = block->GetExpressionByIdx(i);
             if (const auto id = numeration.GetId(expression->GetResult())) {
                 AddInterferences(graph, *id, liveness.GetLiveAfter(*expression), wordCount, nodeCount);
             }

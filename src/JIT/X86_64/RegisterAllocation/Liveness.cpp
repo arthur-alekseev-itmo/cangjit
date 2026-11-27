@@ -56,11 +56,11 @@ std::optional<size_t> Liveness::GetBlockIndex(const CHIR::Block* block) const no
 
 void Liveness::Dump(std::ostream& output, const ValueNumeration& numeration) const
 {
-    for (const auto* block : blocks) {
+    for (auto block : blocks) {
         output << "  block " << block->GetIdentifier() << ":\n";
         for (size_t i = 0; i < block->GetExpressionsNum(); ++i) {
-            const auto* expression = block->GetExpressionByIdx(i);
-            const auto* live = GetLiveBefore(*expression);
+            auto expression = block->GetExpressionByIdx(i);
+            auto live = GetLiveBefore(*expression);
             output << "    before " << expression->ToString(0) << " : {";
             bool first = true;
             for (ValueNumeration::Id id = 0; id < numeration.GetValueCount(); ++id) {

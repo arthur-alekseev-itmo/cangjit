@@ -112,7 +112,7 @@ Result<void, std::string> FunctionMetadata::ValidateMetadataInputs(const std::ve
             return Result<void, std::string>::Failure("invalid landing pad offset");
         }
     }
-    for (const auto* text : {&name, &directory, &filename}) {
+    for (const auto text : {&name, &directory, &filename}) {
         if (text->find_first_of(",\0", 0, 2) != std::string::npos) return Result<void, std::string>::Failure("invalid stack trace string");
     }
 
@@ -300,7 +300,7 @@ FunctionMetadata::EncodedBytes FunctionMetadata::EncodeDescriptor(uint32_t codeS
     std::string dictionary;
     std::array<uint32_t, 3> offsets{};
     unsigned index = 0;
-    for (const auto* text : {&name, &directory, &filename}) {
+    for (const auto text : {&name, &directory, &filename}) {
         offsets[index++] = static_cast<uint32_t>(result.size());
         if (!text->empty()) {
             if (count != 0) dictionary.push_back(',');

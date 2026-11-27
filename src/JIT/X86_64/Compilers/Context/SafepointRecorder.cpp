@@ -36,7 +36,7 @@ bool SafepointRecorder::Record(const CHIR::Expression& expression, const CHIR::V
     auto& roots = result.Value();
     if (temporaryRoot) {
         const auto id = numeration.GetId(temporaryRoot);
-        const auto* slot = id && *id < allocation.GetLocationCount()
+        auto slot = id && *id < allocation.GetLocationCount()
             ? allocation.GetLocation(*id).AsStack() : nullptr;
         const auto rootOffset = slot
             ? StackFrameUtils::GetSlotOffset(slot->index, allocation.GetStackSlotCount()) : std::nullopt;
@@ -45,7 +45,7 @@ bool SafepointRecorder::Record(const CHIR::Expression& expression, const CHIR::V
             return false;
         }
         for (ValueNumeration::Id i = 0; i < allocation.GetLocationCount(); ++i) {
-            const auto* other = allocation.GetLocation(i).AsStack();
+            auto other = allocation.GetLocation(i).AsStack();
             if ((i != *id && other && other->index == slot->index) ||
                 allocation.GetAllocationSlot(i) == slot->index) {
                 context.Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());

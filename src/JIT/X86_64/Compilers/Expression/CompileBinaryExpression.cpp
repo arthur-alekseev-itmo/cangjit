@@ -23,7 +23,7 @@ using namespace asmjit::x86;
 // select the appropriate endpoint if the exact result is out of range.
 void CheckedArithmetic(Cangjie::JIT::X86_64::FunctionContext& ctx,
     const Cangjie::CHIR::BinaryExpressionBase& expr, const Cangjie::CHIR::Block* unwind,
-    Cangjie::CHIR::BinaryExprKind kind, unsigned width, bool isSigned)
+    Cangjie::CHIR::BinaryExprKind kind, size_t width, bool isSigned)
 {
     using K = Cangjie::CHIR::BinaryExprKind;
     auto& a = ctx.GetAssembler();
@@ -89,7 +89,7 @@ void EmitArithmeticException(FunctionContext& ctx, const CHIR::Expression& expr,
     const CHIR::Block* unwind, const char* message, bool overflow)
 {
     auto& global = ctx.GetGlobalContext();
-    const auto* literal = global.GetStringLiteralPool().GetOrCreate(message);
+    auto literal = global.GetStringLiteralPool().GetOrCreate(message);
     auto factory = overflow ? global.GetRuntimeBindings().GetCreateOverflowException()
                             : global.GetRuntimeBindings().GetCreateArithmeticException();
     auto thrower = global.GetRuntimeBindings().GetThrowException();
@@ -103,7 +103,12 @@ void EmitArithmeticException(FunctionContext& ctx, const CHIR::Expression& expr,
     const auto factoryStart = a.offset();
     a.call(asmjit::x86::r11);
     const auto factoryEnd = a.offset();
-    if (!ctx.GetSafepointRecorder().Record(expr) || !MemoryUtils::StoreValue(ctx, expr.GetResult(), asmjit::x86::rax)) {
+    if (!ctx.GetSafepointRecorder().Record(expr)) {
+        return;
+    }
+    auto resultLocation = ctx.GetValueLocation(expr.GetResult());
+    if (!MemoryUtils::Move(ctx, *resultLocation, RegisterUtils::ToLocation(asmjit::x86::rax),
+        *expr.GetResult()->GetType(), asmjit::x86::r11)) {
         return;
     }
     a.mov(asmjit::x86::rdi, asmjit::x86::rax);
@@ -172,18 +177,31 @@ void CompileFloatBinary(FunctionContext& ctx, const CHIR::BinaryExpressionBase& 
         ctx.Fail(JitFailureKind::UnsupportedBinaryOperation);
         return;
     }
-    if (!MemoryUtils::LoadFloatValue(ctx, expr.GetLHSOperand(), asmjit::x86::xmm0, asmjit::x86::rax) ||
-        !MemoryUtils::LoadFloatValue(ctx, expr.GetRHSOperand(), asmjit::x86::xmm1, asmjit::x86::rax)) {
+    auto lhsLocation = ctx.GetValueLocation(expr.GetLHSOperand());
+    auto rhsLocation = ctx.GetValueLocation(expr.GetRHSOperand());
+    if (
+        !MemoryUtils::Move(ctx, RegisterUtils::ToLocation(asmjit::x86::xmm0), *lhsLocation,
+            *expr.GetLHSOperand()->GetType(), asmjit::x86::rax) ||
+        !MemoryUtils::Move(ctx, RegisterUtils::ToLocation(asmjit::x86::xmm1), *rhsLocation,
+            *expr.GetRHSOperand()->GetType(), asmjit::x86::rax)) {
         return;
     }
     auto& a = ctx.GetAssembler();
     const bool single = expr.GetLHSOperand()->GetType()->GetTypeKind() == CHIR::Type::TYPE_FLOAT32;
     if (comparison) {
         EmitFloatComparison(a, kind, single);
-        MemoryUtils::StoreValue(ctx, expr.GetResult(), asmjit::x86::rax);
+        auto resultLocation = ctx.GetValueLocation(expr.GetResult());
+        if (!MemoryUtils::Move(ctx, *resultLocation, RegisterUtils::ToLocation(asmjit::x86::rax),
+            *expr.GetResult()->GetType(), asmjit::x86::r11)) {
+            return;
+        }
     } else {
         EmitFloatArithmetic(a, kind, single);
-        MemoryUtils::StoreFloatValue(ctx, expr.GetResult(), asmjit::x86::xmm0, asmjit::x86::rax);
+        auto resultLocation = ctx.GetValueLocation(expr.GetResult());
+        if (!MemoryUtils::Move(ctx, *resultLocation,
+            RegisterUtils::ToLocation(asmjit::x86::xmm0), *expr.GetResult()->GetType(), asmjit::x86::rax)) {
+            return;
+        }
     }
     if (normal && !ctx.GetFailure()) {
         a.jmp(ctx.GetBlockLabel(normal));
@@ -196,14 +214,14 @@ void CompileBinaryExpression::Compile(FunctionContext& ctx, const CHIR::BinaryEx
     const CHIR::Block* normal, const CHIR::Block* unwind)
 {
     using K = CHIR::BinaryExprKind;
-    const auto* lhs = expr.GetLHSOperand();
-    const auto* rhs = expr.GetRHSOperand();
-    const auto* result = expr.GetResult();
+    auto lhs = expr.GetLHSOperand();
+    auto rhs = expr.GetRHSOperand();
+    auto result = expr.GetResult();
     if (!lhs || !rhs || !result || !lhs->GetType() || !rhs->GetType() || !result->GetType()) {
         ctx.Fail(JitFailureKind::MissingBinaryOperandOrType);
         return;
     }
-    const auto* type = lhs->GetType();
+    auto type = lhs->GetType();
     const auto kind = expr.GetOpKind();
     const auto width = TypeUtils::IntegerWidth(*type);
     const auto rhsWidth = TypeUtils::IntegerWidth(*rhs->GetType());
@@ -238,8 +256,13 @@ void CompileBinaryExpression::Compile(FunctionContext& ctx, const CHIR::BinaryEx
         ctx.Fail(JitFailureKind::UnsupportedBinaryOverflow);
         return;
     }
-    if (!MemoryUtils::LoadValue(ctx, lhs, asmjit::x86::rax) ||
-        !MemoryUtils::LoadValue(ctx, rhs, asmjit::x86::rcx)) {
+    auto lhsLocation = ctx.GetValueLocation(lhs);
+    auto rhsLocation = ctx.GetValueLocation(rhs);
+    if (
+        !MemoryUtils::Move(ctx, RegisterUtils::ToLocation(asmjit::x86::rax), *lhsLocation, *lhs->GetType(),
+            asmjit::x86::r11) ||
+        !MemoryUtils::Move(ctx, RegisterUtils::ToLocation(asmjit::x86::rcx), *rhsLocation, *rhs->GetType(),
+            asmjit::x86::r11)) {
         return;
     }
     auto& a = ctx.GetAssembler();
@@ -342,7 +365,11 @@ void CompileBinaryExpression::Compile(FunctionContext& ctx, const CHIR::BinaryEx
     if (width && !comparison) {
         TypeUtils::NormalizeInteger(a, asmjit::x86::rax, width, type->IsSignedInteger());
     }
-    MemoryUtils::StoreValue(ctx, result, asmjit::x86::rax);
+    auto resultLocation = ctx.GetValueLocation(result);
+    if (!MemoryUtils::Move(ctx, *resultLocation, RegisterUtils::ToLocation(asmjit::x86::rax),
+        *result->GetType(), asmjit::x86::r11)) {
+        return;
+    }
     if (normal && !ctx.GetFailure()) {
         a.jmp(ctx.GetBlockLabel(normal));
     }

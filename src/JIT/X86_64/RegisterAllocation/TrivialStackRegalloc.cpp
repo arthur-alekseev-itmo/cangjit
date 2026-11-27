@@ -30,9 +30,9 @@ RegisterAllocation TrivialStackRegalloc::Allocate(
     size_t stackSlotCount = valueCount;
     for (ValueNumeration::Id valueId = 0; valueId < valueCount; ++valueId) {
         locations.push_back(Location::Stack(static_cast<Location::Index>(valueId)));
-        const auto* value = numeration.GetValue(valueId);
+        auto value = numeration.GetValue(valueId);
         if (value->IsLocalVar()) {
-            const auto* expression = static_cast<const CHIR::LocalVar*>(value)->GetExpr();
+            auto expression = static_cast<const CHIR::LocalVar*>(value)->GetExpr();
             if (expression && expression->GetExprKind() == CHIR::ExprKind::ALLOCATE) {
                 allocationSlots[valueId] = stackSlotCount++;
             }

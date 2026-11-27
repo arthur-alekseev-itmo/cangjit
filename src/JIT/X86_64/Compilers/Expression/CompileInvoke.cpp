@@ -15,6 +15,7 @@
 #include "../../Utils/MemoryUtils.h"
 #include "../../Utils/TypeUtils.h"
 #include "../../Utils/RegisterUtils.h"
+#include "../../Utils/StackFrameUtils.h"
 #include "../../Utils/SystemVCallingConvention.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Expression/Terminator.h"
@@ -36,17 +37,94 @@ void* Resolve(FunctionContext& context, SymbolResult result)
     }
     return result.Value();
 }
+Location OutgoingLocation(const Location& location)
+{
+    if (auto stack = location.AsIncomingStack()) {
+        return Location::Stack(stack->index, Location::StackBase::Rsp);
+    }
+    return location;
+}
+
+bool PlaceTypeInfo(FunctionContext& context, const CHIR::Type* type, const Location& location)
+{
+    if (!type) {
+        context.Fail(JitFailureKind::UnsupportedCallingConvention);
+        return false;
+    }
+    if (auto reg = location.AsGpRegister()) {
+        const auto target = RegisterUtils::Get64BitRegister(reg->type);
+        if (!target) {
+            context.Fail(JitFailureKind::UnsupportedCallingConvention);
+            return false;
+        }
+        return context.GetTypeInfoEmitter().LoadTypeInfo(*type, *target);
+    }
+    auto stack = location.AsIncomingStack();
+    if (!stack) {
+        context.Fail(JitFailureKind::UnsupportedCallingConvention);
+        return false;
+    }
+    if (!context.GetTypeInfoEmitter().LoadTypeInfo(*type, x86::rax)) {
+        return false;
+    }
+    context.GetAssembler().mov(x86::qword_ptr(x86::rsp, static_cast<int32_t>(stack->index * sizeof(uint64_t))),
+        x86::rax);
+    return context.GetError() == asmjit::kErrorOk;
+}
+
+bool PlaceStagedTypeInfo(FunctionContext& context, const Location& location, int32_t offset)
+{
+    auto& assembler = context.GetAssembler();
+    if (auto reg = location.AsGpRegister()) {
+        const auto target = RegisterUtils::Get64BitRegister(reg->type);
+        if (!target) {
+            context.Fail(JitFailureKind::UnsupportedCallingConvention);
+            return false;
+        }
+        assembler.mov(*target, x86::qword_ptr(x86::rsp, offset));
+        return context.GetError() == asmjit::kErrorOk;
+    }
+    auto stack = location.AsIncomingStack();
+    if (!stack) {
+        context.Fail(JitFailureKind::UnsupportedCallingConvention);
+        return false;
+    }
+    assembler.mov(x86::rax, x86::qword_ptr(x86::rsp, offset));
+    assembler.mov(x86::qword_ptr(x86::rsp, static_cast<int32_t>(stack->index * sizeof(uint64_t))), x86::rax);
+    return context.GetError() == asmjit::kErrorOk;
+}
+
+bool PrepareIndirectReturn(FunctionContext& context, const CHIR::Value* result, const x86::Gp& target)
+{
+    auto location = context.GetValueLocation(result);
+    auto stack = location->AsStack();
+    if (!stack || stack->base != Location::StackBase::Frame) {
+        context.Fail(JitFailureKind::UnallocatedResult);
+        return false;
+    }
+    const auto offset = StackFrameUtils::GetSlotOffset(
+        stack->index, context.GetRegisterAllocation().GetStackSlotCount());
+    if (!offset || !result->GetType() ||
+        !MemoryUtils::StoreConstant(context, 0, *location, *result->GetType(), x86::rax)) {
+        return false;
+    }
+    context.GetAssembler().lea(target, x86::qword_ptr(x86::rbp, *offset));
+    return context.GetError() == asmjit::kErrorOk;
+}
 
 
 bool EmitTarget(FunctionContext& context, const CHIR::DynamicDispatch& expression,
     const CHIR::Value* receiver, bool isStatic)
 {
     auto& a = context.GetAssembler();
-    const auto* receiverType = receiver ? receiver->GetType() : nullptr;
+    auto receiverType = receiver ? receiver->GetType() : nullptr;
     const CHIR::Type* objectType = receiverType && receiverType->IsRef()
         ? static_cast<const CHIR::RefType*>(receiverType)->GetBaseType() : nullptr;
     const bool autoEnv = !isStatic && objectType && objectType->IsAutoEnv();
-    if (!MemoryUtils::LoadValue(context, receiver, x86::rax)) {
+    auto receiverLocation = context.GetValueLocation(receiver);
+    if (!receiverType ||
+        !MemoryUtils::Move(context, RegisterUtils::ToLocation(x86::rax), *receiverLocation,
+            *receiverType, x86::r11)) {
         return false;
     }
     if (!isStatic) {
@@ -74,13 +152,13 @@ bool EmitTarget(FunctionContext& context, const CHIR::DynamicDispatch& expressio
     }
 
     auto& bindings = context.GetGlobalContext().GetRuntimeBindings();
-    const auto* intro = expression.GetInstSrcParentCustomTypeOfMethod(context.GetGlobalContext().GetCHIRBuilder());
-    const auto* def = intro ? intro->GetClassDef() : nullptr;
+    auto intro = expression.GetInstSrcParentCustomTypeOfMethod(context.GetGlobalContext().GetCHIRBuilder());
+    auto def = intro ? intro->GetClassDef() : nullptr;
     if (!def || !context.GetTypeInfoEmitter().LoadTypeInfo(*intro, x86::rax)) {
         return false;
     }
     a.mov(x86::qword_ptr(x86::rsp, 24), x86::rax);
-    auto* outerLookup = Resolve(context, bindings.GetMethodOuterTypeInfo());
+    auto outerLookup = Resolve(context, bindings.GetMethodOuterTypeInfo());
     if (!outerLookup) {
         return false;
     }
@@ -90,7 +168,7 @@ bool EmitTarget(FunctionContext& context, const CHIR::DynamicDispatch& expressio
         return false;
     }
     if (def->IsInterface()) {
-        auto* mtable = Resolve(context, bindings.GetMethodTable());
+        auto mtable = Resolve(context, bindings.GetMethodTable());
         if (!mtable) {
             return false;
         }
@@ -101,14 +179,14 @@ bool EmitTarget(FunctionContext& context, const CHIR::DynamicDispatch& expressio
         a.mov(x86::rax, x86::qword_ptr(x86::rax, static_cast<int32_t>(index * sizeof(uint64_t))));
     } else {
         size_t depth = 0;
-        for (auto* current = def; current; current = current->GetSuperClassDef()) {
+        for (auto current = def; current; current = current->GetSuperClassDef()) {
             ++depth;
         }
         if (depth - 1 > static_cast<size_t>(std::numeric_limits<int32_t>::max()) / sizeof(uint64_t)) {
             context.Fail(JitFailureKind::UnsupportedCall, expression.GetExprKind());
             return false;
         }
-        auto* update = Resolve(context, bindings.GetUpdateVTable());
+        auto update = Resolve(context, bindings.GetUpdateVTable());
         if (!update) {
             return false;
         }
@@ -136,12 +214,73 @@ bool EmitTarget(FunctionContext& context, const CHIR::DynamicDispatch& expressio
     return true;
 }
 
+bool PlaceArguments(FunctionContext& context, const CHIR::DynamicDispatch& expression,
+    const ParameterPlacement& placement, bool needsTypeScratch, uint32_t typeScratchSize)
+{
+    const auto args = expression.GetArgs();
+    const auto& parameters = expression.GetCallee()->GetParams();
+    const auto& typeArgs = expression.GetInstantiatedTypeArgs();
+    for (size_t i = 0; i < args.size(); ++i) {
+        const auto it = placement.locations.find(parameters[i]);
+        CJC_ASSERT(it != placement.locations.end());
+        if (it == placement.locations.end() || !args[i] || !args[i]->GetType()) {
+            context.Fail(JitFailureKind::UnsupportedCall, expression.GetExprKind());
+            return false;
+        }
+        auto stack = it->second.AsIncomingStack();
+        if (!stack) {
+            continue;
+        }
+        auto source = context.GetValueLocation(args[i]);
+        if (!MemoryUtils::Move(context, Location::Stack(stack->index, Location::StackBase::Rsp),
+            *source, *args[i]->GetType(), x86::rax)) {
+            return false;
+        }
+    }
+    for (size_t i = 0; i < args.size(); ++i) {
+        const auto it = placement.locations.find(parameters[i]);
+        CJC_ASSERT(it != placement.locations.end());
+        if (it == placement.locations.end()) {
+            context.Fail(JitFailureKind::UnsupportedCall, expression.GetExprKind());
+            return false;
+        }
+        if (it->second.AsIncomingStack()) {
+            continue;
+        }
+        auto source = context.GetValueLocation(args[i]);
+        if (!MemoryUtils::Move(context, OutgoingLocation(it->second), *source,
+            *args[i]->GetType(), x86::r11)) {
+            return false;
+        }
+    }
+    for (size_t i = 0; i < typeArgs.size(); ++i) {
+        const auto& location = placement.genericTypeInfoLocations[i];
+        const auto placed = needsTypeScratch
+            ? PlaceStagedTypeInfo(context, location,
+                static_cast<int32_t>(placement.stackSize + i * sizeof(uint64_t)))
+            : PlaceTypeInfo(context, typeArgs[i], location);
+        if (!placed) {
+            return false;
+        }
+    }
+    const auto scratch = static_cast<int32_t>(placement.stackSize + typeScratchSize);
+    if (placement.outerTypeInfoLocation &&
+        !PlaceStagedTypeInfo(context, *placement.outerTypeInfoLocation, scratch + 8)) {
+        return false;
+    }
+    if (placement.thisTypeInfoLocation &&
+        !PlaceStagedTypeInfo(context, *placement.thisTypeInfoLocation, scratch + 16)) {
+        return false;
+    }
+    return true;
+}
+
 void CompileCall(FunctionContext& context, const CHIR::DynamicDispatch& expression,
     const CHIR::Value* receiver, bool isStatic, const CHIR::Block* normal, const CHIR::Block* unwind)
 {
-    const auto* callee = expression.GetCallee();
-    const auto* returnType = expression.GetMethodType() ? expression.GetMethodType()->GetReturnType() : nullptr;
-    const auto* result = expression.GetResult();
+    auto callee = expression.GetCallee();
+    auto returnType = expression.GetMethodType() ? expression.GetMethodType()->GetReturnType() : nullptr;
+    auto result = expression.GetResult();
     if (!callee || !returnType || !result || !result->GetType()) {
         context.Fail(JitFailureKind::UnsupportedCallingConvention, expression.GetExprKind());
         return;
@@ -164,9 +303,9 @@ void CompileCall(FunctionContext& context, const CHIR::DynamicDispatch& expressi
         context.Fail(JitFailureKind::UnsupportedCallingConvention, expression.GetExprKind());
         return;
     }
-    auto& a = context.GetAssembler();
+    auto& assembler = context.GetAssembler();
     constexpr uint32_t SCRATCH_SIZE = 48;
-    MemoryUtils::ReserveStack(context, SCRATCH_SIZE);
+    assembler.sub(x86::rsp, SCRATCH_SIZE);
     if (!EmitTarget(context, expression, receiver, isStatic)) {
         return;
     }
@@ -176,100 +315,52 @@ void CompileCall(FunctionContext& context, const CHIR::DynamicDispatch& expressi
     uint32_t typeScratchSize = 0;
     if (needsTypeScratch) {
         const std::vector<const CHIR::Type*> types(typeArgs.begin(), typeArgs.end());
-        const auto size = MemoryUtils::StageTypeInfos(context, types);
-        if (!size || *size > static_cast<uint32_t>(std::numeric_limits<int32_t>::max()) -
+        if (types.size() > (static_cast<size_t>(std::numeric_limits<int32_t>::max()) - 15) / sizeof(uint64_t)) {
+            context.Fail(JitFailureKind::UnsupportedCallingConvention, expression.GetExprKind());
+            return;
+        }
+        typeScratchSize = static_cast<uint32_t>((types.size() * sizeof(uint64_t) + 15) & ~size_t{15});
+        if (typeScratchSize > static_cast<uint32_t>(std::numeric_limits<int32_t>::max()) -
                 placement.stackSize - SCRATCH_SIZE) {
             context.Fail(JitFailureKind::UnsupportedCallingConvention, expression.GetExprKind());
             return;
         }
-        typeScratchSize = *size;
-    }
-    MemoryUtils::ReserveStack(context, placement.stackSize);
-    for (size_t i = 0; i < args.size(); ++i) {
-        const auto it = placement.locations.find(parameters[i]);
-        CJC_ASSERT(it != placement.locations.end());
-        if (it == placement.locations.end() || !args[i] || !args[i]->GetType()) {
-            context.Fail(JitFailureKind::UnsupportedCall, expression.GetExprKind());
+        assembler.sub(x86::rsp, typeScratchSize);
+        if (!context.GetTypeInfoEmitter().StoreTypeInfos(types, 0)) {
             return;
         }
-        if (const auto* stack = it->second.AsIncomingStack()) {
-            if (!MemoryUtils::StoreOutgoingArgument(context, args[i], stack->index, placement.stackSize)) {
-                return;
-            }
-        }
     }
-    for (size_t i = 0; i < args.size(); ++i) {
-        const auto it = placement.locations.find(parameters[i]);
-        CJC_ASSERT(it != placement.locations.end());
-        if (it == placement.locations.end()) {
-            context.Fail(JitFailureKind::UnsupportedCall, expression.GetExprKind());
-            return;
-        }
-        const auto& location = it->second;
-        if (const auto* reg = location.AsGpRegister()) {
-            const auto target = RegisterUtils::Get64BitRegister(reg->type);
-            if (!target || !MemoryUtils::LoadValue(context, args[i], *target)) {
-                context.Fail(JitFailureKind::UnsupportedCall, expression.GetExprKind());
-                return;
-            }
-        } else if (const auto* simd = location.AsSimdRegister()) {
-            const auto target = RegisterUtils::GetArgumentSimdRegister(simd->index);
-            if (!target || !MemoryUtils::LoadFloatValue(context, args[i], *target, x86::rax)) {
-                context.Fail(JitFailureKind::UnsupportedCall, expression.GetExprKind());
-                return;
-            }
-        }
+    assembler.sub(x86::rsp, placement.stackSize);
+    if (!PlaceArguments(context, expression, placement, needsTypeScratch, typeScratchSize)) {
+        return;
     }
-    for (size_t i = 0; i < typeArgs.size(); ++i) {
-        const bool placed = needsTypeScratch
-            ? MemoryUtils::PlaceStagedTypeInfo(context, placement.genericTypeInfoLocations[i], placement.stackSize,
-                static_cast<int32_t>(placement.stackSize + i * sizeof(uint64_t)))
-            : MemoryUtils::PlaceTypeInfo(context, typeArgs[i], placement.genericTypeInfoLocations[i],
-                placement.stackSize);
-        if (!placed) {
-            return;
-        }
+    if (placement.indirectReturn && !PrepareIndirectReturn(context, result, x86::rdi)) {
+        return;
     }
     const auto scratch = static_cast<int32_t>(placement.stackSize + typeScratchSize);
-    if (placement.outerTypeInfoLocation &&
-        !MemoryUtils::PlaceStagedTypeInfo(context, *placement.outerTypeInfoLocation, placement.stackSize, scratch + 8)) {
-        return;
-    }
-    if (placement.thisTypeInfoLocation &&
-        !MemoryUtils::PlaceStagedTypeInfo(context, *placement.thisTypeInfoLocation, placement.stackSize, scratch + 16)) {
-        return;
-    }
-    if (placement.indirectReturn && !MemoryUtils::ZeroStackValueAndLoadAddress(context, result, x86::rdi)) {
-        return;
-    }
-    a.mov(x86::r11, x86::qword_ptr(x86::rsp, scratch));
-    const auto callStart = a.offset();
-    a.call(x86::r11);
-    const auto callEnd = a.offset();
+    assembler.mov(x86::r11, x86::qword_ptr(x86::rsp, scratch));
+    const auto callStart = assembler.offset();
+    assembler.call(x86::r11);
+    const auto callEnd = assembler.offset();
     if (!context.GetSafepointRecorder().Record(expression)) {
         return;
     }
-    MemoryUtils::ReleaseStack(context, placement.stackSize + typeScratchSize + SCRATCH_SIZE);
+    assembler.add(x86::rsp, placement.stackSize + typeScratchSize + SCRATCH_SIZE);
     if (!returnType->IsUnit() && !returnType->IsNothing() && !returnType->IsVoid()) {
-        if (TypeUtils::IsFloating(*returnType)) {
-            if (!MemoryUtils::StoreFloatValue(context, result, x86::xmm0, x86::rax)) {
-                return;
-            }
-        } else {
-            const auto width = TypeUtils::TypeWidth(*returnType);
-            if (width) {
-                TypeUtils::NormalizeInteger(a, x86::rax, width, returnType->IsSignedInteger());
-            } else if (!returnType->IsRef() && !returnType->IsCPointer() && !returnType->IsCString()) {
-                context.Fail(JitFailureKind::UnsupportedReturnType, expression.GetExprKind());
-                return;
-            }
-            if (!MemoryUtils::StoreValue(context, result, x86::rax)) {
-                return;
-            }
+        const auto width = TypeUtils::TypeWidth(*returnType);
+        if (!width && !returnType->IsRef() && !returnType->IsCPointer() && !returnType->IsCString()) {
+            context.Fail(JitFailureKind::UnsupportedReturnType, expression.GetExprKind());
+            return;
+        }
+        auto resultLocation = context.GetValueLocation(result);
+        const auto source = TypeUtils::IsFloating(*returnType)
+            ? RegisterUtils::ToLocation(x86::xmm0) : RegisterUtils::ToLocation(x86::rax);
+        if (!MemoryUtils::Move(context, *resultLocation, source, *returnType, x86::r11)) {
+            return;
         }
     }
     if (normal && unwind && !context.GetFailure()) {
-        a.jmp(context.GetBlockLabel(normal));
+        assembler.jmp(context.GetBlockLabel(normal));
         context.GetExceptionLandingEmitter().Emit(*unwind, callStart, callEnd);
     }
 }

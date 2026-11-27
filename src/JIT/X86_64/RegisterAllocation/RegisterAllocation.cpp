@@ -46,20 +46,20 @@ const char* GetRegisterName(GPRegisterType type, OperandWidth width) noexcept
 
 void DumpLocation(const Location& location, std::ostream& output)
 {
-    if (const auto* stack = location.AsStack(); stack != nullptr) {
+    if (auto stack = location.AsStack(); stack != nullptr) {
         output << "STACK(" << stack->index << ')';
         return;
     }
-    if (const auto* reg = location.AsGpRegister(); reg != nullptr) {
+    if (auto reg = location.AsGpRegister(); reg != nullptr) {
         output << "REG(" << reg->index << ", " << GetRegisterName(reg->type, reg->width) << ')';
         return;
     }
 
-    if (const auto* reg = location.AsSimdRegister()) {
+    if (auto reg = location.AsSimdRegister()) {
         output << "XMM(" << reg->index << ')';
         return;
     }
-    const auto* stack = location.AsIncomingStack();
+    auto stack = location.AsIncomingStack();
     assert(stack != nullptr);
     output << "INCOMING_STACK(" << stack->index << ')';
 }

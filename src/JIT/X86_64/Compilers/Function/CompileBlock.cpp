@@ -40,11 +40,11 @@ bool IsLocalClassReference(const CHIR::Type* type)
     if (!type || !type->IsRef()) {
         return false;
     }
-    const auto* base = static_cast<const CHIR::RefType*>(type)->GetBaseType();
+    auto base = static_cast<const CHIR::RefType*>(type)->GetBaseType();
     return base && base->IsClass() && base->IsMustLocalRegion();
 }
 
-unsigned ScalarWidth(const CHIR::Type* type)
+size_t ScalarWidth(const CHIR::Type* type)
 {
     if (!type) {
         return 0;
@@ -64,9 +64,9 @@ bool MatchesReference(const CHIR::Value* reference, const CHIR::Type* type)
         (!ScalarWidth(type) && !type->IsUnit())) {
         return false;
     }
-    const auto* base = static_cast<const CHIR::RefType*>(reference->GetType())->GetBaseType();
+    auto base = static_cast<const CHIR::RefType*>(reference->GetType())->GetBaseType();
     if (IsLocalClassReference(type)) {
-        const auto* expr = reference->IsLocalVar() ? static_cast<const CHIR::LocalVar*>(reference)->GetExpr() : nullptr;
+        auto expr = reference->IsLocalVar() ? static_cast<const CHIR::LocalVar*>(reference)->GetExpr() : nullptr;
         return base == type && expr && expr->GetExprKind() == CHIR::ExprKind::ALLOCATE;
     }
     return base && base->GetTypeKind() == type->GetTypeKind();
@@ -74,7 +74,7 @@ bool MatchesReference(const CHIR::Value* reference, const CHIR::Type* type)
 
 void CompileAllocate(FunctionContext& context, const CHIR::Allocate& expression)
 {
-    const auto* result = expression.GetResult();
+    auto result = expression.GetResult();
     if (!MatchesReference(result, expression.GetType())) {
         context.Fail(JitFailureKind::UnsupportedAllocation);
         return;
@@ -88,24 +88,34 @@ void CompileAllocate(FunctionContext& context, const CHIR::Allocate& expression)
         return;
     }
     context.GetAssembler().lea(asmjit::x86::rax, asmjit::x86::ptr(asmjit::x86::rbp, *offset));
-    MemoryUtils::StoreValue(context, result, asmjit::x86::rax);
+    auto resultLocation = context.GetValueLocation(result);
+    if (!MemoryUtils::Move(context, *resultLocation, RegisterUtils::ToLocation(asmjit::x86::rax),
+        *result->GetType(), asmjit::x86::r11)) {
+        return;
+    }
 }
 
 void CompileLoad(FunctionContext& context, const CHIR::Load& expression)
 {
-    const auto* result = expression.GetResult();
-    const auto* type = result ? result->GetType() : nullptr;
-    const auto* location = expression.GetLocation();
+    auto result = expression.GetResult();
+    auto type = result ? result->GetType() : nullptr;
+    auto location = expression.GetLocation();
     if (!MatchesReference(location, type)) {
         context.Fail(JitFailureKind::UnsupportedMemoryAccess);
         return;
     }
     if (type->IsUnit()) {
         context.GetAssembler().xor_(asmjit::x86::eax, asmjit::x86::eax);
-        MemoryUtils::StoreValue(context, result, asmjit::x86::rax);
+        auto resultLocation = context.GetValueLocation(result);
+        if (!MemoryUtils::Move(context, *resultLocation,
+            RegisterUtils::ToLocation(asmjit::x86::rax), *result->GetType(), asmjit::x86::r11)) {
+            return;
+        }
         return;
     }
-    if (!MemoryUtils::LoadValue(context, location, asmjit::x86::rcx)) {
+    auto sourceLocation = context.GetValueLocation(location);
+    if (!MemoryUtils::Move(context, RegisterUtils::ToLocation(asmjit::x86::rcx),
+        *sourceLocation, *location->GetType(), asmjit::x86::r11)) {
         return;
     }
     auto& a = context.GetAssembler();
@@ -118,14 +128,18 @@ void CompileLoad(FunctionContext& context, const CHIR::Load& expression)
         default: context.Fail(JitFailureKind::UnsupportedMemoryAccess); return;
     }
     TypeUtils::NormalizeInteger(a, asmjit::x86::rax, width, type->IsSignedInteger());
-    MemoryUtils::StoreValue(context, result, asmjit::x86::rax);
+    const auto resultLocation = context.GetValueLocation(result);
+    if (!MemoryUtils::Move(context, *resultLocation, RegisterUtils::ToLocation(asmjit::x86::rax),
+        *result->GetType(), asmjit::x86::r11)) {
+        return;
+    }
 }
 
 void CompileStore(FunctionContext& context, const CHIR::Store& expression)
 {
-    const auto* value = expression.GetValue();
-    const auto* type = value ? value->GetType() : nullptr;
-    const auto* location = expression.GetLocation();
+    const auto value = expression.GetValue();
+    const auto type = value ? value->GetType() : nullptr;
+    const auto location = expression.GetLocation();
     if (!MatchesReference(location, type)) {
         context.Fail(JitFailureKind::UnsupportedMemoryAccess);
         return;
@@ -133,8 +147,13 @@ void CompileStore(FunctionContext& context, const CHIR::Store& expression)
     if (type->IsUnit()) {
         return;
     }
-    if (!MemoryUtils::LoadValue(context, value, asmjit::x86::rax) ||
-        !MemoryUtils::LoadValue(context, location, asmjit::x86::rcx)) {
+    const auto valueLocation = context.GetValueLocation(value);
+    const auto referenceLocation = context.GetValueLocation(location);
+    if (
+        !MemoryUtils::Move(context, RegisterUtils::ToLocation(asmjit::x86::rax), *valueLocation,
+            *value->GetType(), asmjit::x86::r11) ||
+        !MemoryUtils::Move(context, RegisterUtils::ToLocation(asmjit::x86::rcx), *referenceLocation,
+            *location->GetType(), asmjit::x86::r11)) {
         return;
     }
     auto& a = context.GetAssembler();
@@ -157,19 +176,25 @@ void* ResolveExceptionSymbol(FunctionContext& context, SymbolResult symbol)
 
 void CompileRTTI(FunctionContext& context, const CHIR::GetRTTI& expression)
 {
-    if (!MemoryUtils::LoadValue(context, expression.GetOperand(), asmjit::x86::rax)) {
+    auto sourceLocation = context.GetValueLocation(expression.GetOperand());
+    if (!MemoryUtils::Move(context, RegisterUtils::ToLocation(asmjit::x86::rax),
+        *sourceLocation, *expression.GetOperand()->GetType(), asmjit::x86::r11)) {
         return;
     }
     auto& a = context.GetAssembler();
     a.mov(asmjit::x86::rax, asmjit::x86::qword_ptr(asmjit::x86::rax));
     a.shl(asmjit::x86::rax, 16);
     a.shr(asmjit::x86::rax, 16);
-    MemoryUtils::StoreValue(context, expression.GetResult(), asmjit::x86::rax);
+    auto resultLocation = context.GetValueLocation(expression.GetResult());
+    if (!MemoryUtils::Move(context, *resultLocation, RegisterUtils::ToLocation(asmjit::x86::rax),
+        *expression.GetResult()->GetType(), asmjit::x86::r11)) {
+        return;
+    }
 }
 
 void CompileRTTI(FunctionContext& context, const CHIR::GetRTTIStatic& expression)
 {
-    const auto* type = expression.GetRTTIType();
+    auto type = expression.GetRTTIType();
     if (!type) {
         context.Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
         return;
@@ -177,35 +202,41 @@ void CompileRTTI(FunctionContext& context, const CHIR::GetRTTIStatic& expression
     if (!context.GetTypeInfoEmitter().LoadTypeInfo(*type, asmjit::x86::rax)) {
         return;
     }
-    MemoryUtils::StoreValue(context, expression.GetResult(), asmjit::x86::rax);
+    auto resultLocation = context.GetValueLocation(expression.GetResult());
+    if (!MemoryUtils::Move(context, *resultLocation, RegisterUtils::ToLocation(asmjit::x86::rax),
+        *expression.GetResult()->GetType(), asmjit::x86::r11)) {
+        return;
+    }
 }
 
 void CompileInstanceOf(FunctionContext& context, const CHIR::InstanceOf& expression)
 {
-    const auto* object = expression.GetObject();
-    const auto* objectType = object ? object->GetType() : nullptr;
-    const auto* targetType = expression.GetType();
-    const auto* result = expression.GetResult();
+    auto object = expression.GetObject();
+    auto objectType = object ? object->GetType() : nullptr;
+    auto targetType = expression.GetType();
+    auto result = expression.GetResult();
     if (!objectType || !objectType->IsRef() || !targetType ||
         !result || !result->GetType() || !result->GetType()->IsBoolean()) {
         context.Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
         return;
     }
-    const auto* objectClass = static_cast<const CHIR::RefType*>(objectType)->GetBaseType();
-    const auto* targetBase = targetType->IsRef()
+    auto objectClass = static_cast<const CHIR::RefType*>(objectType)->GetBaseType();
+    auto targetBase = targetType->IsRef()
         ? static_cast<const CHIR::RefType*>(targetType)->GetBaseType() : targetType;
     if (!objectClass || !objectClass->IsClass() || !targetBase) {
         context.Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
         return;
     }
     auto& bindings = context.GetGlobalContext().GetRuntimeBindings();
-    auto* subtype = ResolveExceptionSymbol(context, bindings.GetIsSubType());
-    auto* tupleTest = objectClass->IsAny() ? ResolveExceptionSymbol(context, bindings.GetIsTupleTypeOf()) : nullptr;
+    auto subtype = ResolveExceptionSymbol(context, bindings.GetIsSubType());
+    auto tupleTest = objectClass->IsAny() ? ResolveExceptionSymbol(context, bindings.GetIsTupleTypeOf()) : nullptr;
     if (!subtype || (objectClass->IsAny() && !tupleTest) ||
         !context.GetTypeInfoEmitter().LoadTypeInfo(*targetBase, asmjit::x86::rsi)) {
         return;
     }
-    if (!MemoryUtils::LoadValue(context, object, asmjit::x86::rdi)) {
+    auto objectLocation = context.GetValueLocation(object);
+    if (!MemoryUtils::Move(context, RegisterUtils::ToLocation(asmjit::x86::rdi),
+        *objectLocation, *object->GetType(), asmjit::x86::r11)) {
         return;
     }
     auto& a = context.GetAssembler();
@@ -240,12 +271,16 @@ void CompileInstanceOf(FunctionContext& context, const CHIR::InstanceOf& express
     }
     a.movzx(asmjit::x86::eax, asmjit::x86::al);
     a.bind(done);
-    MemoryUtils::StoreValue(context, result, asmjit::x86::rax);
+    auto resultLocation = context.GetValueLocation(result);
+    if (!MemoryUtils::Move(context, *resultLocation, RegisterUtils::ToLocation(asmjit::x86::rax),
+        *result->GetType(), asmjit::x86::r11)) {
+        return;
+    }
 }
 
 void CompileGetException(FunctionContext& context, const CHIR::GetException& expression)
 {
-    auto* target = ResolveExceptionSymbol(context, context.GetGlobalContext().GetRuntimeBindings().GetExceptionWrapper());
+    auto target = ResolveExceptionSymbol(context, context.GetGlobalContext().GetRuntimeBindings().GetExceptionWrapper());
     if (!target) {
         return;
     }
@@ -253,7 +288,11 @@ void CompileGetException(FunctionContext& context, const CHIR::GetException& exp
     a.long_().mov(asmjit::x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(target)));
     a.call(asmjit::x86::r11);
     if (context.GetSafepointRecorder().Record(expression)) {
-        MemoryUtils::StoreValue(context, expression.GetResult(), asmjit::x86::rax);
+        auto resultLocation = context.GetValueLocation(expression.GetResult());
+        if (!MemoryUtils::Move(context, *resultLocation,
+            RegisterUtils::ToLocation(asmjit::x86::rax), *expression.GetResult()->GetType(), asmjit::x86::r11)) {
+            return;
+        }
     }
 }
 
@@ -265,8 +304,11 @@ void CompileBeginCatch(FunctionContext& context, const CHIR::IntrinsicBase& expr
         context.Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
         return;
     }
-    auto* target = ResolveExceptionSymbol(context, context.GetGlobalContext().GetRuntimeBindings().GetPostThrowException());
-    if (!target || !MemoryUtils::LoadValue(context, expression.GetOperand(0), asmjit::x86::rdi)) {
+    auto target = ResolveExceptionSymbol(context, context.GetGlobalContext().GetRuntimeBindings().GetPostThrowException());
+    auto operandLocation = context.GetValueLocation(expression.GetOperand(0));
+    if (!target ||
+        !MemoryUtils::Move(context, RegisterUtils::ToLocation(asmjit::x86::rdi), *operandLocation,
+            *expression.GetOperand(0)->GetType(), asmjit::x86::r11)) {
         return;
     }
     auto& a = context.GetAssembler();
@@ -275,7 +317,11 @@ void CompileBeginCatch(FunctionContext& context, const CHIR::IntrinsicBase& expr
     a.call(asmjit::x86::r11);
     const auto callEnd = a.offset();
     if (context.GetSafepointRecorder().Record(expression)) {
-        MemoryUtils::StoreValue(context, expression.GetResult(), asmjit::x86::rax);
+        auto resultLocation = context.GetValueLocation(expression.GetResult());
+        if (!MemoryUtils::Move(context, *resultLocation,
+            RegisterUtils::ToLocation(asmjit::x86::rax), *expression.GetResult()->GetType(), asmjit::x86::r11)) {
+            return;
+        }
     }
     if (normal && unwind && !context.GetFailure()) {
         a.jmp(context.GetBlockLabel(normal));
@@ -285,13 +331,16 @@ void CompileBeginCatch(FunctionContext& context, const CHIR::IntrinsicBase& expr
 
 void CompileRaiseException(FunctionContext& context, const CHIR::RaiseException& expression)
 {
-    const auto* value = expression.GetExceptionValue();
+    auto value = expression.GetExceptionValue();
     if (!value || !value->GetType() || (!value->GetType()->IsRef() && !value->GetType()->IsGeneric())) {
         context.Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
         return;
     }
-    auto* target = ResolveExceptionSymbol(context, context.GetGlobalContext().GetRuntimeBindings().GetThrowException());
-    if (!target || !MemoryUtils::LoadValue(context, value, asmjit::x86::rdi)) {
+    auto target = ResolveExceptionSymbol(context, context.GetGlobalContext().GetRuntimeBindings().GetThrowException());
+    auto valueLocation = context.GetValueLocation(value);
+    if (!target ||
+        !MemoryUtils::Move(context, RegisterUtils::ToLocation(asmjit::x86::rdi), *valueLocation,
+            *value->GetType(), asmjit::x86::r11)) {
         return;
     }
     auto& a = context.GetAssembler();
@@ -303,7 +352,7 @@ void CompileRaiseException(FunctionContext& context, const CHIR::RaiseException&
         return;
     }
     a.ud2();
-    if (const auto* block = expression.GetExceptionBlock()) {
+    if (auto block = expression.GetExceptionBlock()) {
         context.GetExceptionLandingEmitter().Emit(*block, callStart, callEnd);
     }
 }
@@ -365,18 +414,23 @@ void CompileBlock::CompileExpression(FunctionContext& context, const CHIR::Expre
             break;
         case CHIR::ExprKind::CLASS_STATIC_CAST: {
             const auto& cast = static_cast<const CHIR::ClassStaticCast&>(expression);
-            const auto* source = cast.GetSourceType();
-            const auto* target = cast.GetTargetType();
-            const auto* sourceBase = source && source->IsRef()
+            auto source = cast.GetSourceType();
+            auto target = cast.GetTargetType();
+            auto sourceBase = source && source->IsRef()
                 ? static_cast<const CHIR::RefType*>(source)->GetBaseType() : nullptr;
-            const auto* targetBase = target && target->IsRef()
+            auto targetBase = target && target->IsRef()
                 ? static_cast<const CHIR::RefType*>(target)->GetBaseType() : nullptr;
             if (!sourceBase || !sourceBase->IsClass() || !targetBase || !targetBase->IsClass()) {
                 context.Fail(JitFailureKind::UnsupportedExpression, expression.GetExprKind());
                 break;
             }
-            if (MemoryUtils::LoadValue(context, cast.GetSourceValue(), asmjit::x86::rax)) {
-                MemoryUtils::StoreValue(context, cast.GetResult(), asmjit::x86::rax);
+            auto sourceLocation = context.GetValueLocation(cast.GetSourceValue());
+            auto resultLocation = context.GetValueLocation(cast.GetResult());
+            if (
+                MemoryUtils::Move(context, RegisterUtils::ToLocation(asmjit::x86::rax), *sourceLocation,
+                    *cast.GetSourceValue()->GetType(), asmjit::x86::r11)) {
+                MemoryUtils::Move(context, *resultLocation, RegisterUtils::ToLocation(asmjit::x86::rax),
+                    *cast.GetResult()->GetType(), asmjit::x86::r11);
             }
             break;
         }

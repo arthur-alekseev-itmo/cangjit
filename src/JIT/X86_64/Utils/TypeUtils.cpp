@@ -9,7 +9,7 @@
 #include "cangjie/CHIR/IR/Type/Type.h"
 
 namespace Cangjie::JIT::X86_64 {
-unsigned TypeUtils::IntegerWidth(const CHIR::Type& type) noexcept
+size_t TypeUtils::IntegerWidth(const CHIR::Type& type) noexcept
 {
     using T = CHIR::Type;
     switch (type.GetTypeKind()) {
@@ -22,7 +22,7 @@ unsigned TypeUtils::IntegerWidth(const CHIR::Type& type) noexcept
     }
 }
 
-unsigned TypeUtils::TypeWidth(const CHIR::Type& type) noexcept
+size_t TypeUtils::TypeWidth(const CHIR::Type& type) noexcept
 {
     using T = CHIR::Type;
     if (type.IsBoolean()) {
@@ -52,8 +52,14 @@ bool TypeUtils::IsFloating(const CHIR::Type& type) noexcept
     return type.GetTypeKind() == T::TYPE_FLOAT32 || type.GetTypeKind() == T::TYPE_FLOAT64;
 }
 
+bool TypeUtils::IsFloatingRepresentation(const CHIR::Type& type) noexcept
+{
+    using T = CHIR::Type;
+    return type.GetTypeKind() == T::TYPE_FLOAT16 || IsFloating(type);
+}
+
 void TypeUtils::NormalizeInteger(asmjit::x86::Assembler& assembler, const asmjit::x86::Gp& reg,
-    unsigned width, bool isSigned)
+    size_t width, bool isSigned)
 {
     if (width != 64) {
         assembler.shl(reg, 64 - width);

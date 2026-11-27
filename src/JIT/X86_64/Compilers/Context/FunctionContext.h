@@ -60,6 +60,7 @@ public:
     const ValueNumeration& GetValueNumeration() const noexcept;
     const Liveness& GetLiveness() const noexcept { return liveness; }
     const RegisterAllocation& GetRegisterAllocation() const noexcept;
+    const Location* GetValueLocation(const CHIR::Value* value) noexcept;
 
 private:
     class EmitterErrorHandler final : public asmjit::ErrorHandler {

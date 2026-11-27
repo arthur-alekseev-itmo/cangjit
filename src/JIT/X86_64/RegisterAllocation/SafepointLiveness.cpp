@@ -30,7 +30,7 @@ bool IsObjectType(const CHIR::Type& type)
     if (!type.IsRef()) {
         return false;
     }
-    const auto* base = static_cast<const CHIR::RefType&>(type).GetBaseType();
+    auto base = static_cast<const CHIR::RefType&>(type).GetBaseType();
     return base && (base->IsClass() || base->IsRawArray() || base->IsBox());
 }
 
@@ -41,11 +41,11 @@ std::optional<Id> GetExceptionalResult(const CHIR::Block& predecessor, const CHI
     if (count == 0) {
         return std::nullopt;
     }
-    const auto* expression = predecessor.GetExpressionByIdx(count - 1);
+    auto expression = predecessor.GetExpressionByIdx(count - 1);
     if (expression->GetSuccessAndErrorBlocks().second != &successor) {
         return std::nullopt;
     }
-    const auto* result = expression->GetResult();
+    auto result = expression->GetResult();
     return result ? numbers.GetId(result) : std::nullopt;
 }
 
@@ -82,7 +82,7 @@ Bits ComputeInitializedAtBlock(const std::vector<CHIR::Block*>& blocks,
             }
             Bits after = before;
             for (size_t i = 0; i < blocks[block]->GetExpressionsNum(); ++i) {
-                if (const auto* result = blocks[block]->GetExpressionByIdx(i)->GetResult()) {
+                if (auto result = blocks[block]->GetExpressionByIdx(i)->GetResult()) {
                     if (const auto id = numbers.GetId(result)) {
                         after[*id] = 1;
                     }
@@ -103,7 +103,7 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
     const ValueNumeration& numbers, const RegisterAllocation& allocation, const Liveness& liveness,
     const CHIR::Expression& target)
 {
-    const auto* body = function.GetBody();
+    auto body = function.GetBody();
     const size_t count = numbers.GetValueCount();
     if (!body || allocation.GetLocationCount() != count) {
         return SafepointLivenessResult::Failure("invalid function or allocation for safepoint liveness");
@@ -112,7 +112,7 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
     // ordinary use, e.g. when it is the base of a live derived pointer.
     std::unordered_set<size_t> slots;
     for (Id id = 0; id < count; ++id) {
-        const auto* slot = allocation.GetLocation(id).AsStack();
+        auto slot = allocation.GetLocation(id).AsStack();
         if (!slot || !slots.insert(slot->index).second ||
             !StackFrameUtils::GetSlotOffset(slot->index, allocation.GetStackSlotCount())) {
             return SafepointLivenessResult::Failure("safepoint liveness requires distinct valid stack locations");
@@ -132,7 +132,7 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
     }
     std::vector<std::vector<size_t>> successors(blocks.size()), predecessors(blocks.size());
     for (size_t i = 0; i < blocks.size(); ++i) {
-        for (const auto* successor : blocks[i]->GetSuccessors()) {
+        for (auto successor : blocks[i]->GetSuccessors()) {
             const auto found = liveness.GetBlockIndex(successor);
             if (!found) {
                 return SafepointLivenessResult::Failure("CFG successor outside function");
@@ -157,13 +157,13 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
         return SafepointLivenessResult::Failure("safepoint is not in a reachable block");
     }
     for (auto b : work) {
-        for (const auto* expr : blocks[b]->GetExpressions()) {
-            const auto* result = expr->GetResult();
+        for (auto expr : blocks[b]->GetExpressions()) {
+            auto result = expr->GetResult();
             if (result && !numbers.GetId(result)) {
                 return SafepointLivenessResult::Failure("expression result is missing from value numeration");
             }
             for (size_t operand = 0; operand < expr->GetNumOfNonSuccessorOperands(); ++operand) {
-                const auto* value = expr->GetOperand(operand);
+                auto value = expr->GetOperand(operand);
                 if (value && (value->IsLocalVar() || value->IsParameter()) && !numbers.GetId(value)) {
                     return SafepointLivenessResult::Failure("expression operand is missing from value numeration");
                 }
@@ -176,15 +176,15 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
     if (!liveness.ContainsExpression(target)) {
         return SafepointLivenessResult::Failure("safepoint expression is absent from its block");
     }
-    const auto* live = liveness.GetLiveBefore(target);
+    auto live = liveness.GetLiveBefore(target);
     bool found = false;
     const auto expressions = blocks[b]->GetExpressions();
-    for (const auto* expr : expressions) {
+    for (auto expr : expressions) {
         if (expr == &target) {
             found = true;
             break;
         }
-        if (const auto* result = expr->GetResult()) {
+        if (auto result = expr->GetResult()) {
             if (auto id = numbers.GetId(result)) {
                 initialized[*id] = 1;
             }
@@ -218,16 +218,16 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
             error = "uninitialized or cyclic reference provenance at safepoint";
             return -1;
         }
-        const auto* value = numbers.GetValue(id);
-        const auto* type = value ? value->GetType() : nullptr;
+        auto value = numbers.GetValue(id);
+        auto type = value ? value->GetType() : nullptr;
         if (!type) {
             error = "live value has no CHIR type";
             return -1;
         }
-        const auto* expr = value->IsLocalVar() ? static_cast<const CHIR::LocalVar*>(value)->GetExpr() : nullptr;
-        const auto* referenceBase = type->IsRef() ? static_cast<const CHIR::RefType*>(type)->GetBaseType() : nullptr;
+        auto expr = value->IsLocalVar() ? static_cast<const CHIR::LocalVar*>(value)->GetExpr() : nullptr;
+        auto referenceBase = type->IsRef() ? static_cast<const CHIR::RefType*>(type)->GetBaseType() : nullptr;
         if (expr && expr->GetExprKind() == CHIR::ExprKind::ALLOCATE && referenceBase && referenceBase->IsRef()) {
-            const auto* storedBase = static_cast<const CHIR::RefType*>(referenceBase)->GetBaseType();
+            auto storedBase = static_cast<const CHIR::RefType*>(referenceBase)->GetBaseType();
             if (storedBase && storedBase->IsClass() && storedBase->IsMustLocalRegion() &&
                 allocation.GetAllocationSlot(id)) {
                 // The slot address moves with the stack; its contents are stable local-region pointers.
@@ -255,7 +255,7 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
         }
         if (expr && (expr->GetExprKind() == CHIR::ExprKind::ALLOCATE ||
                      expr->GetExprKind() == CHIR::ExprKind::TRY_ALLOCATE)) {
-            const auto* base = type->IsRef() ? static_cast<const CHIR::RefType*>(type)->GetBaseType() : nullptr;
+            auto base = type->IsRef() ? static_cast<const CHIR::RefType*>(type)->GetBaseType() : nullptr;
             if (base && base->IsClass()) {
                 roots.insert(id);
                 return 2;
@@ -284,8 +284,8 @@ SafepointLivenessResult ComputeSafepointLiveness(const CHIR::Function& function,
                 // its ultimate root, and associate this location with it.
                 Id root = *base;
                 while (true) {
-                    const auto* v = numbers.GetValue(root);
-                    const auto* e = v->IsLocalVar() ? static_cast<const CHIR::LocalVar*>(v)->GetExpr() : nullptr;
+                    auto v = numbers.GetValue(root);
+                    auto e = v->IsLocalVar() ? static_cast<const CHIR::LocalVar*>(v)->GetExpr() : nullptr;
                     if (!e || (e->GetExprKind() != CHIR::ExprKind::GET_ELEMENT_REF &&
                                e->GetExprKind() != CHIR::ExprKind::GET_ELEMENT_BY_NAME)) {
                         break;

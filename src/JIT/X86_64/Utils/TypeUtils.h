@@ -16,11 +16,12 @@ class Type;
 namespace Cangjie::JIT::X86_64 {
 class TypeUtils final {
 public:
-    static unsigned IntegerWidth(const CHIR::Type& type) noexcept;
-    static unsigned TypeWidth(const CHIR::Type& type) noexcept;
+    static size_t IntegerWidth(const CHIR::Type& type) noexcept;
+    static size_t TypeWidth(const CHIR::Type& type) noexcept;
     static bool IsFloating(const CHIR::Type& type) noexcept;
+    static bool IsFloatingRepresentation(const CHIR::Type& type) noexcept;
     static void NormalizeInteger(asmjit::x86::Assembler& assembler, const asmjit::x86::Gp& reg,
-        unsigned width, bool isSigned);
+        size_t width, bool isSigned);
 };
 } // namespace Cangjie::JIT::X86_64
 

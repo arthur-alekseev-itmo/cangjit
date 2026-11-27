@@ -152,5 +152,12 @@ const RegisterAllocation& FunctionContext::GetRegisterAllocation() const noexcep
     return registerAllocation;
 }
 
+const Location* FunctionContext::GetValueLocation(const CHIR::Value* value) noexcept
+{
+    const auto id = valueNumeration.GetId(value);
+    CJC_ASSERT(id);
+    return &registerAllocation.GetLocation(*id);
+}
+
 
 } // namespace Cangjie::JIT::X86_64

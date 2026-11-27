@@ -22,10 +22,10 @@ namespace Cangjie::JIT::X86_64 {
 void CompileNumericCast::Compile(FunctionContext& context, const CHIR::NumericCastBase& expression,
     const CHIR::Block* normal, const CHIR::Block* unwind)
 {
-    const auto* source = expression.GetSourceValue();
-    const auto* result = expression.GetResult();
-    const auto* sourceType = source ? source->GetType() : nullptr;
-    const auto* targetType = result ? result->GetType() : nullptr;
+    auto source = expression.GetSourceValue();
+    auto result = expression.GetResult();
+    auto sourceType = source ? source->GetType() : nullptr;
+    auto targetType = result ? result->GetType() : nullptr;
     if (!sourceType || !targetType) {
         context.Fail(JitFailureKind::UnsupportedNumericCast);
         return;
@@ -55,7 +55,9 @@ void CompileNumericCast::Compile(FunctionContext& context, const CHIR::NumericCa
         context.Fail(JitFailureKind::UnsupportedNumericCastOverflow);
         return;
     }
-    if (!MemoryUtils::LoadValue(context, source, asmjit::x86::rax)) {
+    auto sourceLocation = context.GetValueLocation(source);
+    if (!MemoryUtils::Move(context, RegisterUtils::ToLocation(asmjit::x86::rax),
+        *sourceLocation, *sourceType, asmjit::x86::r11)) {
         return;
     }
     auto& assembler = context.GetAssembler();
@@ -101,7 +103,11 @@ void CompileNumericCast::Compile(FunctionContext& context, const CHIR::NumericCa
         assembler.bind(done);
     }
     TypeUtils::NormalizeInteger(assembler, asmjit::x86::rax, targetWidth, targetSigned);
-    MemoryUtils::StoreValue(context, result, asmjit::x86::rax);
+    auto resultLocation = context.GetValueLocation(result);
+    if (!MemoryUtils::Move(context, *resultLocation, RegisterUtils::ToLocation(asmjit::x86::rax),
+        *targetType, asmjit::x86::r11)) {
+        return;
+    }
     if (normal && !context.GetFailure()) {
         assembler.jmp(context.GetBlockLabel(normal));
     }
@@ -110,7 +116,9 @@ void CompileNumericCast::Compile(FunctionContext& context, const CHIR::NumericCa
 void CompileNumericCast::CompileFloatCast(FunctionContext& context, const CHIR::Value* source, const CHIR::Value* result,
     bool needsConversion, bool targetIsFloat64, const CHIR::Block* normal)
 {
-    if (!MemoryUtils::LoadFloatValue(context, source, asmjit::x86::xmm0, asmjit::x86::rax)) {
+    auto sourceLocation = context.GetValueLocation(source);
+    if (!MemoryUtils::Move(context, RegisterUtils::ToLocation(asmjit::x86::xmm0),
+        *sourceLocation, *source->GetType(), asmjit::x86::rax)) {
         return;
     }
     auto& assembler = context.GetAssembler();
@@ -119,7 +127,11 @@ void CompileNumericCast::CompileFloatCast(FunctionContext& context, const CHIR::
     } else if (needsConversion) {
         assembler.cvtsd2ss(asmjit::x86::xmm0, asmjit::x86::xmm0);
     }
-    MemoryUtils::StoreFloatValue(context, result, asmjit::x86::xmm0, asmjit::x86::rax);
+    auto resultLocation = context.GetValueLocation(result);
+    if (!MemoryUtils::Move(context, *resultLocation,
+        RegisterUtils::ToLocation(asmjit::x86::xmm0), *result->GetType(), asmjit::x86::rax)) {
+        return;
+    }
     if (normal && !context.GetFailure()) {
         assembler.jmp(context.GetBlockLabel(normal));
     }

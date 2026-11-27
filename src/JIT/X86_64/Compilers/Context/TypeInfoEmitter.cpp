@@ -16,6 +16,7 @@
 #include "FunctionContext.h"
 #include "GlobalContext.h"
 #include "../../Utils/MemoryUtils.h"
+#include "../../Utils/RegisterUtils.h"
 #include "cangjie/CHIR/IR/Expression/Expression.h"
 #include "cangjie/CHIR/IR/Type/ClassDef.h"
 #include "cangjie/CHIR/IR/Type/ExtendDef.h"
@@ -59,7 +60,7 @@ struct TypeTemplateInfo {
 std::optional<std::string> PrepareClosureTemplate(
     FunctionContext& context, const CHIR::CustomType& type, std::vector<CHIR::Type*>& arguments)
 {
-    const auto* custom = &type;
+    auto custom = &type;
     auto& builder = context.GetGlobalContext().GetCHIRBuilder();
     if (custom->IsAutoEnvInstBase()) {
         custom = const_cast<CHIR::ClassType*>(static_cast<const CHIR::ClassType*>(custom))
@@ -85,7 +86,7 @@ std::optional<std::string> GetCustomTemplateName(
     if (custom.IsAutoEnvBase()) {
         return PrepareClosureTemplate(context, custom, arguments);
     }
-    const auto* def = custom.GetCustomTypeDef();
+    auto def = custom.GetCustomTypeDef();
     if (!def || !context.GetGlobalContext().GetRuntimeBindings().EnsurePackage(def->GetPackageName())) {
         context.Fail(JitFailureKind::UnresolvedSymbol);
         return std::nullopt;
@@ -155,9 +156,9 @@ void* ResolveConcreteTypeInfo(FunctionContext& context, const CHIR::Type& input)
         }
     }
     const bool isCustom = type->IsClass() || type->IsStruct() || type->IsEnum();
-    const auto* custom = isCustom ? static_cast<const CHIR::CustomType*>(type) : nullptr;
+    auto custom = isCustom ? static_cast<const CHIR::CustomType*>(type) : nullptr;
     if (custom && !custom->IsAutoEnvBase()) {
-        const auto* def = custom->GetCustomTypeDef();
+        auto def = custom->GetCustomTypeDef();
         if (!def || !context.GetGlobalContext().GetRuntimeBindings().EnsurePackage(def->GetPackageName())) {
             context.Fail(JitFailureKind::UnresolvedSymbol);
             return nullptr;
@@ -170,7 +171,7 @@ void* ResolveConcreteTypeInfo(FunctionContext& context, const CHIR::Type& input)
             return nullptr;
         }
         const auto name = CHIR::GetTypeQualifiedName(*type, true);
-        if (auto* found = reinterpret_cast<void* (*)(const char*)>(symbol.Value())(name.c_str())) {
+        if (auto found = reinterpret_cast<void* (*)(const char*)>(symbol.Value())(name.c_str())) {
             return found;
         }
     }
@@ -180,8 +181,8 @@ void* ResolveConcreteTypeInfo(FunctionContext& context, const CHIR::Type& input)
     }
     std::vector<void*> infos;
     infos.reserve(prepared->arguments.size());
-    for (const auto* arg : prepared->arguments) {
-        auto* info = arg ? ResolveConcreteTypeInfo(context, *arg) : nullptr;
+    for (auto arg : prepared->arguments) {
+        auto info = arg ? ResolveConcreteTypeInfo(context, *arg) : nullptr;
         if (!info) {
             context.Fail(JitFailureKind::UnresolvedSymbol);
             return nullptr;
@@ -197,9 +198,24 @@ void* TypeInfoEmitter::GetConcreteTypeInfo(const CHIR::Type& type)
     return ResolveConcreteTypeInfo(context, type);
 }
 
+
+bool TypeInfoEmitter::StoreTypeInfos(const std::vector<const CHIR::Type*>& types, int32_t rspOffset)
+{
+    auto& assembler = context.GetAssembler();
+    for (size_t i = 0; i < types.size(); ++i) {
+        if (!types[i] || !LoadTypeInfo(*types[i], asmjit::x86::rax)) {
+            context.Fail(JitFailureKind::UnsupportedCall);
+            return false;
+        }
+        const auto offset = rspOffset + static_cast<int32_t>(i * sizeof(uint64_t));
+        assembler.mov(asmjit::x86::qword_ptr(asmjit::x86::rsp, offset), asmjit::x86::rax);
+    }
+    return context.GetError() == asmjit::kErrorOk;
+}
+
 bool TypeInfoEmitter::LoadTypeInfo(const CHIR::Type& input, const asmjit::x86::Gp& target)
 {
-    const auto* function = context.GetFunction();
+    auto function = context.GetFunction();
     auto& assembler = context.GetAssembler();
     const CHIR::Type* type = &input;
     while (type->IsRef()) {
@@ -209,8 +225,8 @@ bool TypeInfoEmitter::LoadTypeInfo(const CHIR::Type& input, const asmjit::x86::G
             return false;
         }
     }
-    const auto* parent = function->GetParentCustomTypeDef();
-    const auto* parentType = parent
+    auto parent = function->GetParentCustomTypeDef();
+    auto parentType = parent
         ? (parent->IsExtend() ? static_cast<const CHIR::ExtendDef*>(parent)->GetExtendedType() : parent->GetType())
         : nullptr;
     if (parent && !parent->GetGenericTypeParams().empty() && type == parentType) {
@@ -281,7 +297,9 @@ bool TypeInfoEmitter::LoadTypeInfo(const CHIR::Type& input, const asmjit::x86::G
             return true;
         }
         const auto& parameters = function->GetParams();
-        if (parameters.empty() || !MemoryUtils::LoadValue(context, parameters.front(), target)) {
+        auto location = context.GetValueLocation(parameters.front());
+        if (!MemoryUtils::Move(context, RegisterUtils::ToLocation(target), *location,
+            *parameters.front()->GetType(), asmjit::x86::r11)) {
             context.Fail(JitFailureKind::UnsupportedCall);
             return false;
         }
@@ -297,7 +315,7 @@ bool TypeInfoEmitter::LoadTypeInfo(const CHIR::Type& input, const asmjit::x86::G
         }
         const auto& arguments = prepared->arguments;
         const auto stackSize = static_cast<uint32_t>((arguments.size() * sizeof(uint64_t) + 15) & ~size_t{15});
-        MemoryUtils::ReserveStack(context, stackSize);
+        assembler.sub(asmjit::x86::rsp, stackSize);
         for (size_t i = 0; i < arguments.size(); ++i) {
             if (!arguments[i] || !LoadTypeInfo(*arguments[i], asmjit::x86::rax)) {
                 return false;
@@ -312,13 +330,13 @@ bool TypeInfoEmitter::LoadTypeInfo(const CHIR::Type& input, const asmjit::x86::G
         // Native CodeGen emits llvm.cj.get.type.info as a nounwind, readonly
         // intrinsic; its runtime helper is not a managed safepoint.
         assembler.call(asmjit::x86::r11);
-        MemoryUtils::ReleaseStack(context, stackSize);
+        assembler.add(asmjit::x86::rsp, stackSize);
         if (target != asmjit::x86::rax) {
             assembler.mov(target, asmjit::x86::rax);
         }
         return true;
     }
-    auto* info = GetConcreteTypeInfo(*type);
+    auto info = GetConcreteTypeInfo(*type);
     if (!info) {
         context.Fail(JitFailureKind::UnresolvedSymbol);
         return false;

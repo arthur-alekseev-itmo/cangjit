@@ -14,6 +14,7 @@
 #include "../Context/GlobalContext.h"
 #include "../Function/CompileFunctionStub.h"
 #include "../../Utils/MemoryUtils.h"
+#include "../../Utils/RegisterUtils.h"
 #include "cangjie/CHIR/IR/Type/ClassDef.h"
 #include "cangjie/CHIR/IR/Value/Value.h"
 #include "cangjie/Utils/ConstantsUtils.h"
@@ -57,16 +58,16 @@ AllocationFunction SelectAllocationFunction(JitRuntimeBindings& bindings, const 
 void CompileAllocation(FunctionContext& context, const CHIR::AllocateBase& expression,
     const CHIR::Block* normal, const CHIR::Block* unwind)
 {
-    const auto* type = expression.GetType();
-    const auto* result = expression.GetResult();
-    const auto* resultType = result ? result->GetType() : nullptr;
+    auto type = expression.GetType();
+    auto result = expression.GetResult();
+    auto resultType = result ? result->GetType() : nullptr;
     if (!type || !type->IsClass() || !resultType || !resultType->IsRef() ||
         static_cast<const CHIR::RefType*>(resultType)->GetBaseType() != type ||
         type->IsAutoEnvBase()) {
         context.Fail(JitFailureKind::UnsupportedAllocation, expression.GetExprKind());
         return;
     }
-    const auto* def = static_cast<const CHIR::ClassType*>(type)->GetClassDef();
+    auto def = static_cast<const CHIR::ClassType*>(type)->GetClassDef();
     if (!def || !def->IsClass()) {
         context.Fail(JitFailureKind::UnsupportedAllocation, expression.GetExprKind());
         return;
@@ -78,11 +79,11 @@ void CompileAllocation(FunctionContext& context, const CHIR::AllocateBase& expre
     const bool local = type->IsLocalRegion();
 
     const bool dynamic = type->IsGenericRelated();
-    auto* typeInfo = dynamic ? nullptr : context.GetTypeInfoEmitter().GetConcreteTypeInfo(*type);
+    auto typeInfo = dynamic ? nullptr : context.GetTypeInfoEmitter().GetConcreteTypeInfo(*type);
     auto& bindings = context.GetGlobalContext().GetRuntimeBindings();
-    auto* sizeAddress = Resolve(context, bindings.GetTypeInstanceSize());
+    auto sizeAddress = Resolve(context, bindings.GetTypeInstanceSize());
     auto allocation = SelectAllocationFunction(bindings, *def, local);
-    auto* allocateAddress = Resolve(context, std::move(allocation.address));
+    auto allocateAddress = Resolve(context, std::move(allocation.address));
     if ((!dynamic && !typeInfo) || !sizeAddress || !allocateAddress) {
         context.Fail(JitFailureKind::UnresolvedSymbol, expression.GetExprKind());
         return;
@@ -109,7 +110,7 @@ void CompileAllocation(FunctionContext& context, const CHIR::AllocateBase& expre
             return;
         }
         methods.reserve(functions.size());
-        for (const auto* method : functions) {
+        for (auto method : functions) {
             const auto address = CompileFunctionStub::Compile(context.GetGlobalContext(), method);
             if (!address) {
                 context.Fail(JitFailureKind::UnsupportedCall, expression.GetExprKind());
@@ -124,7 +125,7 @@ void CompileAllocation(FunctionContext& context, const CHIR::AllocateBase& expre
         if (!context.GetTypeInfoEmitter().LoadTypeInfo(*type, x86::rax)) {
             return;
         }
-        MemoryUtils::ReserveStack(context, 16);
+        assembler.sub(x86::rsp, 16);
         assembler.mov(x86::qword_ptr(x86::rsp), x86::rax);
         assembler.mov(x86::rdi, x86::rax);
         assembler.long_().mov(x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(sizeAddress)));
@@ -149,9 +150,11 @@ void CompileAllocation(FunctionContext& context, const CHIR::AllocateBase& expre
         return;
     }
     if (dynamic) {
-        MemoryUtils::ReleaseStack(context, 16);
+        assembler.add(x86::rsp, 16);
     }
-    if (!MemoryUtils::StoreValue(context, result, x86::rax)) {
+    auto resultLocation = context.GetValueLocation(result);
+    if (!MemoryUtils::Move(context, *resultLocation, RegisterUtils::ToLocation(x86::rax),
+        *result->GetType(), x86::r11)) {
         return;
     }
     for (size_t i = 0; i < methods.size(); ++i) {
@@ -159,8 +162,10 @@ void CompileAllocation(FunctionContext& context, const CHIR::AllocateBase& expre
         assembler.mov(x86::qword_ptr(x86::rax, static_cast<int32_t>(8 + i * sizeof(uint64_t))), x86::r11);
     }
     if (local && def->GetFinalizer()) {
-        auto* addFinalizer = Resolve(context, bindings.GetAddLocalFinalizer());
-        if (!addFinalizer || !MemoryUtils::LoadValue(context, result, x86::rdi)) {
+        auto addFinalizer = Resolve(context, bindings.GetAddLocalFinalizer());
+        if (!addFinalizer ||
+            !MemoryUtils::Move(context, RegisterUtils::ToLocation(x86::rdi), *resultLocation,
+                *result->GetType(), x86::r11)) {
             return;
         }
         assembler.long_().mov(x86::r11, asmjit::imm(reinterpret_cast<uintptr_t>(addFinalizer)));
@@ -174,7 +179,7 @@ void CompileAllocation(FunctionContext& context, const CHIR::AllocateBase& expre
 
 void CompileRegion(FunctionContext& context, const CHIR::Expression& expression, SymbolResult symbol)
 {
-    auto* address = Resolve(context, std::move(symbol));
+    auto address = Resolve(context, std::move(symbol));
     if (!address) {
         return;
     }

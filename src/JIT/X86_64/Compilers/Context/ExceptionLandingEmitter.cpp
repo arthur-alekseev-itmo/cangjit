@@ -34,18 +34,18 @@ std::optional<std::vector<uintptr_t>> ExceptionLandingEmitter::GetExceptionTypes
     const auto lookup = reinterpret_cast<LookupType>(symbol.Value());
     std::vector<uintptr_t> types;
     types.reserve(exceptions.size());
-    for (const auto* type : exceptions) {
+    for (auto type : exceptions) {
         if (!type) {
             context.Fail(JitFailureKind::UnsupportedExpression);
             return std::nullopt;
         }
-        const auto* def = type->GetClassDef();
+        auto def = type->GetClassDef();
         if (!def || !bindings.EnsurePackage(def->GetPackageName())) {
             context.Fail(JitFailureKind::UnresolvedSymbol);
             return std::nullopt;
         }
         const auto name = CHIR::GetTypeQualifiedName(*type, true);
-        auto* info = lookup(name.c_str());
+        auto info = lookup(name.c_str());
         if (!info) {
             context.Fail(JitFailureKind::UnresolvedSymbol);
             return std::nullopt;

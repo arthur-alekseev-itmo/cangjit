@@ -51,10 +51,15 @@ public:
         OperandWidth width;
     };
 
-    struct StackLocation {
-        Index index;
+    enum class StackBase : uint8_t {
+        Frame,
+        Rsp,
     };
 
+    struct StackLocation {
+        Index index;
+        StackBase base = StackBase::Frame;
+    };
     struct SimdRegisterLocation {
         Index index;
         OperandWidth width;
@@ -71,9 +76,9 @@ public:
         return Location(GpRegisterLocation{index, type, width});
     }
 
-    static Location Stack(Index index) noexcept
+    static Location Stack(Index index, StackBase base = StackBase::Frame) noexcept
     {
-        return Location(StackLocation{index});
+        return Location(StackLocation{index, base});
     }
 
     static Location SimdRegister(Index index, OperandWidth width) noexcept

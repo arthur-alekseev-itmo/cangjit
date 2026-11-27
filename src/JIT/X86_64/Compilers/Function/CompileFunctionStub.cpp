@@ -39,12 +39,12 @@ CompilationResult Materialize(const CHIR::Function& function, void* context)
 CodeAddress ResolveAndPatch(GlobalContext* context, FunctionRecord* record, CodeAddress returnAddress) noexcept
 {
     try {
-        const auto* found = context->GetLazyCallSiteRegistry().Find(returnAddress);
+        auto found = context->GetLazyCallSiteRegistry().Find(returnAddress);
         const auto site = found && found->callee == record ? std::optional<LazyCallSite>(*found) : std::nullopt;
         auto result = context->GetFunctionResolver().Resolve(*record, Materialize, context);
         if (result) {
             if (site) {
-                auto* allocator = context->GetRuntime().allocator();
+                auto allocator = context->GetRuntime().allocator();
                 JitAllocator::Span span;
                 const uint64_t target = result.Value();
                 if (allocator->query(span, reinterpret_cast<void*>(site->caller)) != kErrorOk ||
@@ -70,7 +70,7 @@ bool IsObjectReference(const CHIR::Type& type)
     if (!type.IsRef()) {
         return false;
     }
-    const auto* base = static_cast<const CHIR::RefType&>(type).GetBaseType();
+    auto base = static_cast<const CHIR::RefType&>(type).GetBaseType();
     return base && (base->IsClass() || base->IsRawArray() || base->IsBox());
 }
 
@@ -90,18 +90,18 @@ bool SupportedSignature(const CHIR::Function& function, std::vector<int32_t>& gc
         return type.IsInteger() || type.IsBoolean() || TypeUtils::IsFloating(type) ||
             IsObjectReference(type);
     };
-    const auto* result = placement.abiReturnType;
+    auto result = placement.abiReturnType;
     if (!result || (!result->IsVoid() && !result->IsUnit() && !result->IsNothing() && !supported(*result))) {
         return false;
     }
     if (placement.indirectReturn) {
-        const auto* reg = placement.sretLocation ? placement.sretLocation->AsGpRegister() : nullptr;
+        auto reg = placement.sretLocation ? placement.sretLocation->AsGpRegister() : nullptr;
         if (!reg || reg->type != GPRegisterType::RDI || reg->index != 0) {
             return false;
         }
         stackSlots.push_back(-16);
     }
-    for (const auto* parameter : function.GetParams()) {
+    for (auto parameter : function.GetParams()) {
         const auto type = placement.abiParameterTypes.find(parameter);
         const auto location = placement.locations.find(parameter);
         CJC_ASSERT(type != placement.abiParameterTypes.end());
@@ -113,12 +113,12 @@ bool SupportedSignature(const CHIR::Function& function, std::vector<int32_t>& gc
         if (!IsObjectReference(*type->second)) {
             continue;
         }
-        if (const auto* reg = location->second.AsGpRegister()) {
+        if (auto reg = location->second.AsGpRegister()) {
             if (reg->index >= 6) {
                 return false;
             }
             gcSlots.push_back(-16 - static_cast<int32_t>(reg->index * 8));
-        } else if (const auto* stack = location->second.AsIncomingStack()) {
+        } else if (auto stack = location->second.AsIncomingStack()) {
             const auto offset = StackFrameUtils::GetIncomingArgumentOffset(stack->index);
             if (!offset) {
                 return false;
@@ -254,7 +254,7 @@ void* MakeResolverStub(GlobalContext& context, FunctionRecord& record, std::vect
     const auto base = reinterpret_cast<CodeAddress>(allocation);
     auto finalMetadata = metadata.Serialize(base + metadataOffset, base + 4, codeSize);
     JitAllocator::Span span;
-    auto* allocator = runtime.allocator();
+    auto allocator = runtime.allocator();
     if (!finalMetadata || finalMetadata.Value().descriptor.size() != provisional.Value().descriptor.size() ||
         allocator->query(span, allocation) != kErrorOk ||
         allocator->write(span, metadataOffset, finalMetadata.Value().descriptor.data(),
