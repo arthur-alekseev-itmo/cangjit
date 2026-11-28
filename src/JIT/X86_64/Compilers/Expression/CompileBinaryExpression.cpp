@@ -91,8 +91,10 @@ void EmitArithmeticException(FunctionContext& ctx, const CHIR::Expression& expr,
     auto& global = ctx.GetGlobalContext();
     JIT_ASSERT(expr.GetResult() != nullptr, "arithmetic exception is raised from a valued expression");
     auto literal = global.GetStringLiteralPool().GetOrCreate(message);
-    auto factory = overflow ? global.GetRuntimeBindings().GetCreateOverflowException()
-                            : global.GetRuntimeBindings().GetCreateArithmeticException();
+    auto resolved = global.GetRuntimeBindings().Resolve(
+        overflow ? "rt$CreateOverflowException_msg" : "rt$CreateArithmeticException_msg");
+    Require(resolved);
+    auto factory = resolved.Value();
     auto thrower = global.GetRuntimeBindings().GetThrowException();
     auto& a = ctx.GetAssembler();
     a.long_().mov(asmjit::x86::rdi, asmjit::imm(reinterpret_cast<uintptr_t>(literal)));

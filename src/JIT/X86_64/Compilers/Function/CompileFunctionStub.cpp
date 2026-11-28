@@ -81,7 +81,6 @@ bool IsObjectReference(const CHIR::Type& type)
 // live in the saved-register frame while the runtime resolves the callee.
 void CollectRootSlots(const CHIR::Function& function, std::vector<int32_t>& gcSlots)
 {
-    JIT_ASSERT(!function.IsCFunc(), "lazily compiled callee is not a C function");
     const auto placement = SystemVCallingConvention::GetNativeParameterPlacement(function);
     // sret returns only pass through Unit/Nothing; other aggregates are unsupported.
     JIT_ASSERT(placement.basePointerLocations.empty() && !placement.indirectReturn,
@@ -115,22 +114,21 @@ class ResolverStubEmitter final {
 public:
     explicit ResolverStubEmitter(Assembler& assembler) : a(assembler) {}
 
-    void Emit(GlobalContext& context, FunctionRecord& record, void* c2nStub, uint32_t& safepoint)
+    void Emit(GlobalContext& context, FunctionRecord& record, uint32_t* safepoint)
     {
         SaveArguments();
-        ResolveAndJump(context, record, c2nStub, safepoint);
+        ResolveAndJump(context, record, safepoint);
     }
 
 private:
-    // Build a runtime frame and save the incoming integer and SIMD argument registers.
     void SaveArguments()
     {
+        /// Move every register used by calling conv. onto the stack
         a.push(rbp);
         a.mov(rbp, rsp);
         const auto marker = a.newLabel();
         a.call(marker);
         a.bind(marker);
-        // The marker occupies [rbp-8]. Keep RSP 16-byte aligned at the call.
         a.sub(rsp, 184);
         a.mov(qword_ptr(rbp, -16), rdi);
         a.mov(qword_ptr(rbp, -24), rsi);
@@ -148,9 +146,11 @@ private:
         a.movdqu(xmmword_ptr(rbp, -184), xmm7);
     }
 
-    // Resolve the target, restore the original arguments, then tail-jump to it.
-    void ResolveAndJump(GlobalContext& context, FunctionRecord& record, void* c2nStub, uint32_t& safepoint)
+    void ResolveAndJump(GlobalContext& context, FunctionRecord& record, uint32_t* safepoint)
     {
+        const auto c2nStub = context.GetRuntimeBindings().GetNativeToCangjieStub();
+
+        /// CJ_MCC_C2NStub(ResolveAndPatch, 0, context, record)  does  ResolveAndPatch(context, record)
         a.mov(rdi, reinterpret_cast<uintptr_t>(&context));
         a.mov(rsi, reinterpret_cast<uintptr_t>(&record));
         a.mov(rdx, qword_ptr(rbp, 8));
@@ -160,7 +160,9 @@ private:
         a.mov(rax, reinterpret_cast<uintptr_t>(c2nStub));
         a.call(rax);
         // CJ_MCC_C2NStub removes both stack words before returning.
-        safepoint = static_cast<uint32_t>(a.offset() - 4);
+        *safepoint = static_cast<uint32_t>(a.offset() - 4);
+        
+        /// Restore arguments, tailcall to compiled function
         a.mov(r11, rax);
         a.mov(rdi, qword_ptr(rbp, -16));
         a.mov(rsi, qword_ptr(rbp, -24));
@@ -184,26 +186,14 @@ private:
     Assembler& a;
 };
 
-// Emits a per-callee entry that resolves the function on first call. The
-// allocation starts with the metadata prefix; the executable entry follows it.
-void* MakeResolverStub(GlobalContext& context, FunctionRecord& record, std::vector<int32_t> gcSlots)
+void* EmitResolverStubMetadata(GlobalContext& context, CodeHolder& code, Assembler& assembler,
+    uint32_t safepoint, std::vector<int32_t> gcSlots)
 {
     auto& runtime = context.GetRuntime();
-    auto c2nStub = context.GetRuntimeBindings().GetCangjieToNativeStub();
-    CodeHolder code;
-    JIT_ASSERT(code.init(runtime.environment()) == kErrorOk, "resolver stub code holder initializes");
-    context.GetLogger().LogResolverStubEmission(code, record.GetFunction().GetIdentifier());
-    Assembler assembler(&code);
-    JIT_ASSERT(assembler.embedUInt32(0) == kErrorOk, "resolver stub prefix is emitted");
-    uint32_t safepoint = 0;
-    ResolverStubEmitter(assembler).Emit(context, record, c2nStub, safepoint);
-    // The prefix and the stub body are always emitted.
     const auto offset = assembler.offset();
-    JIT_ASSERT(offset > 4 && offset - 4 <= UINT32_MAX, "resolver stub has a valid code size");
     const auto codeSize = static_cast<uint32_t>(offset - 4);
     FunctionMetadata metadata(context.IsStackGrowthEnabled());
     metadata.RecordFrame(192, {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX});
-    // Reference arguments are the only roots; a stub never has stack-interior roots.
     metadata.RecordSafepoint(safepoint, 0, std::move(gcSlots), 0, {}, 0, {});
     const auto provisional = metadata.Serialize(0x20000000, 0x10000000, codeSize);
     JIT_ASSERT(assembler.align(AlignMode::kData, 4) == kErrorOk, "resolver stub metadata is aligned");
@@ -218,7 +208,6 @@ void* MakeResolverStub(GlobalContext& context, FunctionRecord& record, std::vect
     JIT_ASSERT(allocationError == kErrorOk, "resolver stub is allocated");
     const auto base = reinterpret_cast<CodeAddress>(allocation);
     const auto finalMetadata = metadata.Serialize(base + metadataOffset, base + 4, codeSize);
-    // The descriptor layout depends on the code size only, never on addresses.
     JIT_ASSERT(finalMetadata.descriptor.size() == provisional.descriptor.size(),
         "resolver stub metadata size is address independent");
     JitAllocator::Span span;
@@ -229,6 +218,21 @@ void* MakeResolverStub(GlobalContext& context, FunctionRecord& record, std::vect
     JIT_ASSERT(allocator->write(span, 0, finalMetadata.prefix.data(), finalMetadata.prefix.size()) == kErrorOk,
         "resolver stub prefix is published");
     return allocation;
+}
+
+void* MakeResolverStub(GlobalContext& context, FunctionRecord& record, std::vector<int32_t> gcSlots)
+{
+    auto& runtime = context.GetRuntime();
+    CodeHolder code;
+    JIT_ASSERT(code.init(runtime.environment()) == kErrorOk, "resolver stub code holder initializes");
+    Assembler assembler(&code);
+    JIT_ASSERT(assembler.embedUInt32(0) == kErrorOk, "resolver stub prefix is emitted");
+
+    context.GetLogger().LogResolverStubEmission(code, record.GetFunction().GetIdentifier());
+
+    uint32_t safepoint = 0;
+    ResolverStubEmitter(assembler).Emit(context, record, &safepoint);
+    return EmitResolverStubMetadata(context, code, assembler, safepoint, std::move(gcSlots));
 }
 } // namespace
 

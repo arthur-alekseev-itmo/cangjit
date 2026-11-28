@@ -98,10 +98,3 @@ JIT_RUNTIME_FUNCTION(EndLocalRegion, void*, "CJ_MCC_EndLocalRegion", true)
 
 // Retrieves the instance size from type information.
 JIT_RUNTIME_FUNCTION(TypeInstanceSize, void*, "_ZNK12MapleRuntime8TypeInfo15GetInstanceSizeEv", true)
-
-// Creates an overflow exception with a message.
-JIT_RUNTIME_FUNCTION(CreateOverflowException, void*, "rt$CreateOverflowException_msg", true)
-
-// Creates an arithmetic exception with a message.
-JIT_RUNTIME_FUNCTION(CreateArithmeticException, void*, "rt$CreateArithmeticException_msg", true)
-
